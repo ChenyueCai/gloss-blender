@@ -13,7 +13,6 @@ SERVER_URL = "ws://localhost:6060/websocket"
 
 
 class WSClient:
-    """Singleton-like WS client that persists across add-on reloads."""
     _instance = None
 
     def __new__(cls, *args, **kwargs):
@@ -29,60 +28,92 @@ class WSClient:
 
         self.uri = uri
         self.ws = None
-
         self.loop = None
         self.thread = None
         self._running = False
+        self.send_queue = asyncio.Queue() 
+        self.receive_queue = [] # thread-safe list for Blender main thread
 
-        self.send_queue = None
-        self.receive_queue = []
-
-    # -----------------------------------------------------------
-    # -------------------- ASYNC WORKERS -------------------------
-    # -----------------------------------------------------------
+    # ---------------------------------------------------------
+    # Connection + Workers
+    # ---------------------------------------------------------
 
     async def connect(self):
-        self.ws = await websockets.connect(self.uri, max_size=40 * 1024 * 1024)
-        print("WS connected")
+        """Try connecting to the websocket."""
+        try:
+            self.ws = await websockets.connect(self.uri, max_size=40 * 1024 * 1024)
+            print("WS connected")
+        except Exception as e:
+            print("WS connect failed:", e)
+            await asyncio.sleep(1)
+            self.ws = None
 
     async def send_worker(self):
+        """Continuously send messages from the send_queue with reconnect."""
         while self._running:
             data = await self.send_queue.get()
+
             if self.ws is None:
                 await self.connect()
+                if self.ws is None:
+                    await asyncio.sleep(1)
+                    continue
+
             try:
                 await self.ws.send(json.dumps(data))
+
+            except websockets.ConnectionClosed:
+                print("Send failed — WS closed, reconnecting...")
+                self.ws = None
+                await asyncio.sleep(0.5)
+
             except Exception as e:
                 print("Send failed:", e)
+                self.ws = None
+                await asyncio.sleep(1)
 
     async def receive_worker(self):
+        """Continuously listen for messages and reconnect on failures."""
         while self._running:
             if self.ws is None:
                 await self.connect()
+                if self.ws is None:
+                    await asyncio.sleep(1)
+                    continue
+
             try:
                 msg = await self.ws.recv()
                 self.receive_queue.append(msg)
+
+            except websockets.ConnectionClosed:
+                print("Receive failed — WS closed, reconnecting...")
+                self.ws = None
+                await asyncio.sleep(0.5)
+
             except Exception as e:
                 print("Receive failed:", e)
+                self.ws = None
                 await asyncio.sleep(1)
 
     async def main_worker(self):
+        """Run sender and receiver tasks."""
         await asyncio.gather(
             self.send_worker(),
             self.receive_worker(),
         )
 
     async def close_ws(self):
+        """Close socket only — workers will exit with _running=False."""
         if self.ws:
             try:
                 await self.ws.close()
             except:
                 pass
-            self.ws = None
+        self.ws = None
 
-    # -----------------------------------------------------------
-    # ---------------------- MANAGEMENT --------------------------
-    # -----------------------------------------------------------
+    # ---------------------------------------------------------
+    # Start / Stop
+    # ---------------------------------------------------------
 
     def start(self):
         """Start loop ONLY if not already running."""
@@ -109,9 +140,7 @@ class WSClient:
             self.thread = threading.Thread(target=runner, daemon=True)
             self.thread.start()
 
-        print("WS client started")
-
-    def stop(self, force=False):
+    def stop(self):
         """
         Stop WS only if Blender is quitting.
         During add-on reload, keep it alive to speed up development.
@@ -124,11 +153,6 @@ class WSClient:
 
         if not self._running:
             print("WS client already stopped")
-            return
-
-        # If Blender is not quitting -> skip full shutdown
-        if not force and not bpy.app.is_quit:
-            print("WS stop skipped (addon reload). WebSocket kept alive.")
             return
 
         print("Stopping WS client...")
@@ -150,35 +174,38 @@ class WSClient:
 
         print("WS client fully stopped")
 
-    # -----------------------------------------------------------
-    # --------------------- USER API -----------------------------
-    # -----------------------------------------------------------
+    # ---------------------------------------------------------
+    # Public API for Blender
+    # ---------------------------------------------------------
 
     def send(self, data: dict):
-        if self.loop and self._running:
-            asyncio.run_coroutine_threadsafe(self.send_queue.put(data), self.loop)
+        """Non-blocking send from Blender (thread-safe)."""
+        if self.loop:
+            asyncio.run_coroutine_threadsafe(
+                self.send_queue.put(data),
+                self.loop
+            )
 
     def poll_messages(self):
-        """Called in Blender main thread via timer."""
+        """Called by Blender every 0.2s on main thread."""
         while self.receive_queue:
             message = self.receive_queue.pop(0)
 
-            if type(message) == bytes:
+            if isinstance(message, bytes):
                 message = from_binary(message)
-                start = time.time()
                 new_texture = message["texture"]
                 update_texture(new_texture)
-                print(f"Processed message in {time.time() - start:.2f} sec")
-
-            elif type(message) == str:
+                
+            elif isinstance(message, str):
                 print(message)
 
-        return 0.2
+        return 0.2  # run again after 0.2s
 
 
-# -----------------------------------------
-# GLOBAL SINGLETON INSTANCE
-# -----------------------------------------
+# ---------------------------------------------------------
+# Global instance + Blender hooks
+# ---------------------------------------------------------
+
 ws_client = WSClient()
 
 
@@ -188,5 +215,4 @@ def register_client():
 
 
 def unregister_client():
-    # Do NOT force stop unless Blender is quitting
-    ws_client.stop(force=False)
+    ws_client.stop()
