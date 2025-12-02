@@ -3,13 +3,15 @@ import asyncio
 import threading
 import websockets
 import json
+import os
 import time
+import torchvision
 
 from .utils.mesh import update_texture
 from .utils.io import from_binary
 
 
-SERVER_URL = "ws://localhost:6060/websocket"
+SERVER_URL = "ws://localhost:10023/websocket"
 
 
 class WSClient:
@@ -186,20 +188,22 @@ class WSClient:
                 self.loop
             )
 
-    def poll_messages(self):
+    def poll_str_messages(self):
         """Called by Blender every 0.2s on main thread."""
         while self.receive_queue:
             message = self.receive_queue.pop(0)
-
-            if isinstance(message, bytes):
-                message = from_binary(message)
-                new_texture = message["texture"]
-                update_texture(new_texture)
                 
-            elif isinstance(message, str):
+            if isinstance(message, str):
                 print(message)
 
         return 0.2  # run again after 0.2s
+
+    def poll_bin_messages(self):
+        while self.receive_queue:
+            message = self.receive_queue.pop(0)
+            if isinstance(message, bytes):
+                message = from_binary(message)
+                return message
 
 
 # ---------------------------------------------------------
@@ -211,7 +215,7 @@ ws_client = WSClient()
 
 def register_client():
     ws_client.start()
-    bpy.app.timers.register(ws_client.poll_messages)
+    bpy.app.timers.register(ws_client.poll_str_messages)
 
 
 def unregister_client():

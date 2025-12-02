@@ -1,14 +1,14 @@
 import bpy
 import os
 import bpy.utils.previews
-from .utils.image import get_preview
+from .utils.image import get_preview, get_brush_preview
 #from .utils.brush import load_brushes_from_folder, get_brush_preview
 
 
 
-class GLAZE_PT_DualMeshPanel(bpy.types.Panel):
+class GLAZE_PT_Panel(bpy.types.Panel):
     bl_label = "GlazePanel"
-    bl_idname = "GLAZE_PT_DualMeshPanel"
+    bl_idname = "GLAZE_PT_Panel"
     bl_space_type = "VIEW_3D"
     bl_region_type = "UI"
     bl_category = "Glaze"
@@ -20,7 +20,6 @@ class GLAZE_PT_DualMeshPanel(bpy.types.Panel):
         layout.operator("glaze.load_config", text="Load Glaze Config")
         layout.operator("glaze.glaze_reload_addon", icon="FILE_REFRESH")
         
-        
         # LOAD MESH
         row = layout.row(align=True)
         row.label(text="Meshes:", icon="MESH_CUBE")
@@ -31,7 +30,7 @@ class GLAZE_PT_DualMeshPanel(bpy.types.Panel):
         # LOAD REF IMAGE
         split = layout.split(factor=0.6)
         col_left = split.column(align=True)
-        col_left.label(text="Reference View", icon="FILE_IMAGE")
+        col_left.label(text="Reference View", icon="IMAGE_REFERENCE")
         # Display filename if loaded
         if context.scene.current_view:
             filename = bpy.path.basename(context.scene.current_view.image_path)
@@ -54,6 +53,19 @@ class GLAZE_PT_DualMeshPanel(bpy.types.Panel):
             col_right.label(text="(No Image)")
             
         # PAINT MODE
+        split = layout.split(factor=0.2)
+        col_left = split.column(align=True)
+        col_left.label(text="Paint Mode", icon="USER")
+        col_right = split.row(align=True)
+        col_right.operator("glaze.select_target_face", text="FILL") #TODO: change func to Fill
+  
+        # INFERENCE FACE MODE
+        split = layout.split(factor=0.2)
+        col_left = split.column(align=True)
+        col_left.label(text="View Selection")
+        props = context.scene.inference_view_settings
+        col_right = split.row(align=True)
+        col_right.prop(props, "selection_mode", expand=True)
         
         # CREATE BRUSHES
         row = layout.row(align=True)
@@ -73,18 +85,17 @@ class GLAZE_PT_DualMeshPanel(bpy.types.Panel):
                 col = grid.box().column(align=True)
             else:
                 col = grid.column(align=True)
-            icon_id = 0 #brush.preview.icon_id if brush.preview else 0
-
+            icon_path = os.path.join(context.scene.glaze_config.brushes_folder, f"{brush.name}", "icon.png")  
+            icon_id = get_brush_preview(icon_path) #brush.preview.icon_id if brush.preview else 0 #TODO:
             op = col.operator(
                 "glaze.show_brush",
                 text="",                  # icon-only
                 icon_value=icon_id
             )
             op.brush_name = brush.name
-            # Set tooltip dynamically — Blender reads from bl_description
-            #op.bl_description = f"Brush: {brush.name}"
-        
-        box = layout.box()
+            
+        split_layout = layout.split(factor=0.8)
+        box = split_layout.column().box()
         box.label(text="Create New Brushes")
         split =  box.split(factor=0.45)
         col_left = split.column()
@@ -97,34 +108,8 @@ class GLAZE_PT_DualMeshPanel(bpy.types.Panel):
         op = row.operator("glaze.create_ref_brush", text="Ref Brush")
         op.brush_name = context.scene.new_brush_name
         
+        split_layout.column().operator("glaze.clear_brush_lib", text="Clear All")
         
-        # op = layout.operator("glaze.create_brush", text="Create Brush")
-        # op.brush_name = context.scene.new_brush_name
-        # op.brush_type = context.scene.new_brush_type
-
-        # layout.separator()
-        # layout.label(text="Existing Brushes:")
-        # for brush in context.scene.glaze_brushes:
-        #     if context.scene.current_brush == brush.name:
-        #         box = layout.box()
-        #         col = box.column()
-        #     else:
-        #         col = layout.column()
-        #     row = col.row()
-        #     row.label(text=f"{brush.name} type={brush.brush_type} sv_id={brush.sv_id}")
-        #     row = layout.row()
-        #     op = row.operator("glaze.set_brush", text="Set as Current")
-        #     op.brush_name = brush.name
-        #     op = row.operator("glaze.prepare_brush", text="Prepare")
-        #     op.brush_name = brush.name
-
-        # layout.separator()
-        # row = layout.row()
-        # row.operator("glaze.select_target_face", text="Set Target Face")
-        # row.operator("glaze.select_reference_face", text="Set Reference Face")
-        # # # TODO: update the mesh texture once the server send information
+        # # # update the mesh texture once the server send information
         # layout.operator("glaze.update_texture", text="Update Texture")
-        
-       
-        
-
+    

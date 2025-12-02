@@ -37,3 +37,14 @@ class GlazeBrush(bpy.types.PropertyGroup):
 
 class FaceIndexItem(bpy.types.PropertyGroup):
     index: bpy.props.IntProperty(name="Face Index")
+    
+
+class InferenceViewSettings(bpy.types.PropertyGroup):
+    selection_mode: bpy.props.EnumProperty(
+        name="Mode",
+        items=[
+            ('FACE', "Face Mode", ""),
+            ('VIEW', "View Mode", "")
+        ],
+        default='VIEW'
+    )

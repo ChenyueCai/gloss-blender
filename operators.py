@@ -7,7 +7,9 @@ from .utils.config import load_glaze_config_from_yaml
 from .utils.mesh import load_mesh, duplicate_mesh, apply_texture
 from .utils.image import list_images
 
+import time
 from .client import ws_client
+import torchvision
 
 
 REF_MESH_NAME = "GlazeMesh_Ref"
@@ -151,6 +153,17 @@ class GLAZE_OT_create_auto_brushes(bpy.types.Operator):
             message = {"type": "add_brush",
                     "data": brush_info}
             ws_client.send(message)
+            received = False
+            start = time.time()
+            while not received and (time.time() - start) < 8:
+                rec_message = ws_client.poll_bin_messages()
+                if rec_message is not None:
+                    if rec_message.get("brush icon") is not None:
+                        brush_icon = rec_message["brush icon"]
+                        brush_dir = os.path.join(bpy.context.scene.glaze_config.brushes_folder, f"{brush.name}")    
+                        os.makedirs(brush_dir, exist_ok=True)
+                        torchvision.utils.save_image(brush_icon.permute(2, 0, 1), os.path.join(brush_dir, "icon.png"))  
+                    received = True 
         else:
             self.report({'INFO'}, f"already created : {self.brush_name}")
         return {'FINISHED'}
@@ -168,6 +181,20 @@ class GLAZE_OT_create_ref_brushes(bpy.types.Operator):
         if not self.brush_name:
             self.report({'ERROR'}, "Brush name cannot be empty")
             return {'CANCELLED'}
+        obj = bpy.data.objects.get(REF_MESH_NAME)
+        context.scene.reference_faces.clear()
+        bm = bmesh.from_edit_mesh(obj.data)
+        bm.faces.ensure_lookup_table()
+        reference_faces = []
+        for f in bm.faces:
+            if f.select:
+                entry = context.scene.reference_faces.add()
+                entry.index = f.index
+                reference_faces.append(f.index)
+                self.report({'INFO'}, f"Adding {f.index} as a reference face")
+        if len(reference_faces) == 0:
+            self.report({'ERROR'}, "Reference Brush Requires Reference Face Selected before Creation.")
+            return {'CANCELLED'}
         scene = context.scene
         if not brush_exists(scene, self.brush_name, context.scene.current_view.sv_id, brush_type):
             brush = scene.glaze_brushes.add()
@@ -176,10 +203,21 @@ class GLAZE_OT_create_ref_brushes(bpy.types.Operator):
             brush.sv_id = context.scene.current_view.sv_id
             brush_info = {"brush_name": self.brush_name, 
                         "brush_type":brush_type,
-                        "sv_id":brush.sv_id}
+                        "sv_id":brush.sv_id,
+                        "reference_faces": reference_faces}
             message = {"type": "add_brush",
                     "data": brush_info}
             ws_client.send(message)
+            start = time.time()
+            while not received and (time.time() - start) < 8:
+                rec_message = ws_client.poll_bin_messages()
+                if rec_message is not None:
+                    if rec_message.get("brush icon") is not None:
+                        brush_icon = rec_message["brush icon"]
+                        brush_dir = os.path.join(bpy.context.scene.glaze_config.brushes_folder, f"{brush.name}")    
+                        os.makedirs(brush_dir, exist_ok=True)
+                        torchvision.utils.save_image(brush_icon.permute(2, 0, 1), os.path.join(brush_dir, "icon.png"))  
+                    received = True    
         else:
             self.report({'INFO'}, f"already created : {self.brush_name}")
         return {'FINISHED'}
@@ -196,7 +234,17 @@ class GLAZE_OT_SetBrush(bpy.types.Operator):
         # TODO: any texture chnage in the scene?
         return {"FINISHED"}
 
+class GLAZE_OT_ClearBrushLib(bpy.types.Operator):
+    bl_idname = "glaze.clear_brush_lib"
+    bl_label = "Clear Brush Library"
 
+    def execute(self, context):
+        context.scene.current_brush = ""
+        context.scene.glaze_brushes.clear()
+        self.report({'INFO'}, f"Clear All Brushes")
+        # TODO: any texture chnage in the scene?
+        return {"FINISHED"}
+    
 class GLAZE_OT_ShowBrush(bpy.types.Operator):
     bl_idname = "glaze.show_brush"
     bl_label = "Brush"

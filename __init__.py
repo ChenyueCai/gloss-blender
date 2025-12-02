@@ -76,9 +76,9 @@ def setup_text():
                 draw_text(region)
                 break
 
-# run after 1 second to ensure UI is ready
-#bpy.app.timers.register(setup_text, first_interval=1.0)
+
 def register():
+    bpy.app.timers.register(setup_text)
     for cls in classes:
         try:
             bpy.utils.register_class(cls)
@@ -93,10 +93,11 @@ def register():
     bpy.types.Scene.new_brush_name = bpy.props.StringProperty(name="New Brush Name", default="MyBrush")
     bpy.types.Scene.target_faces = bpy.props.CollectionProperty(type=FaceIndexItem)
     bpy.types.Scene.reference_faces = bpy.props.CollectionProperty(type=FaceIndexItem)
-    bpy.app.timers.register(setup_text, first_interval=1.0)
+    bpy.types.Scene.inference_view_settings = bpy.props.PointerProperty(type=InferenceViewSettings)  
+    register_client()
     
 def unregister():
-    #unregister_client()
+    unregister_client()
     for h in handlers:
         bpy.types.SpaceView3D.draw_handler_remove(h, 'WINDOW')
         handlers.clear()
@@ -108,5 +109,4 @@ def unregister():
     del bpy.types.Scene.current_view
     for cls in reversed(classes):
         bpy.utils.unregister_class(cls)
-    
     
