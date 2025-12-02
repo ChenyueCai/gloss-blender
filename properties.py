@@ -17,12 +17,14 @@ class GlazeConfig(bpy.types.PropertyGroup):
     cache_folder: bpy.props.StringProperty(name="Cache Folder", subtype='DIR_PATH', default="")
 
 class GlazeSingleView(bpy.types.PropertyGroup):
+    mesh: bpy.props.StringProperty()
     sv_id: bpy.props.IntProperty()
     image_path: bpy.props.StringProperty(name="Image", description="Select an image file", subtype='FILE_PATH')
     
     
 class GlazeBrush(bpy.types.PropertyGroup):
     name: bpy.props.StringProperty()
+    mesh: bpy.props.StringProperty()
     sv_id: bpy.props.IntProperty()
     brush_type: bpy.props.EnumProperty(
         name="Brush Type",

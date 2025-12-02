@@ -11,6 +11,7 @@ def list_images(folder_path):
 
 
 preview_collection = None
+brush_preview_collection = None
 
 def get_preview(path):
     global preview_collection
@@ -27,6 +28,26 @@ def get_preview(path):
     # Load the preview synchronously
     try:
         preview = preview_collection.load(name, path, "IMAGE")
+        return preview.icon_id
+    except Exception as e:
+        print("Preview load error:", e)
+        return 0
+
+def get_brush_preview(path):
+    global brush_preview_collection
+
+    if brush_preview_collection is None:
+        brush_preview_collection = bpy.utils.previews.new()
+
+    name = path.split('/')[-2]
+    
+    # Avoid caching stale previews
+    if name in brush_preview_collection:
+        return brush_preview_collection[name].icon_id
+
+    # Load the preview synchronously
+    try:
+        preview = brush_preview_collection.load(name, path, "IMAGE")
         return preview.icon_id
     except Exception as e:
         print("Preview load error:", e)

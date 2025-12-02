@@ -34,8 +34,10 @@ class GLAZE_OT_LoadReferenceMesh(bpy.types.Operator):
 
     def execute(self, context):
         print("Loading reference mesh:", self.filepath)
-        ref_mesh = load_mesh(mesh_path=self.filepath, name=REF_MESH_NAME)  # You can change importer
+        mesh_name = os.path.splitext(os.path.basename(self.filepath))[0] + "ref"
+        ref_mesh = load_mesh(mesh_path=self.filepath, name=mesh_name)  # You can change importer
         ref_mesh.location = (-1.5, 0, 0)
+        context.scene.current_reference_mesh = ref_mesh
         screen = context.window.screen
         areas = [a for a in screen.areas if a.type == 'VIEW_3D']
         left_area, right_area = areas[0], areas[1]
@@ -57,8 +59,10 @@ class GLAZE_OT_LoadPaintMesh(bpy.types.Operator):
 
     def execute(self, context):
         print("Loading paint mesh:", self.filepath)
-        paint_mesh = load_mesh(mesh_path=self.filepath, name=PAINT_MESH_NAME)
+        mesh_name = os.path.splitext(os.path.basename(self.filepath))[0]  + "_pnt"
+        paint_mesh = load_mesh(mesh_path=self.filepath, name=mesh_name)
         paint_mesh.location = (1.5, 0, 0)
+        context.scene.current_paint_mesh = paint_mesh
         screen = context.window.screen
         areas = [a for a in screen.areas if a.type == 'VIEW_3D']
         left_area, right_area = areas[0], areas[1]
@@ -100,10 +104,11 @@ class GLAZE_OT_SetReference(bpy.types.Operator):
         curr_view = context.scene.current_view
         single_view_path = curr_view.image_path
         curr_view.sv_id = int(os.path.basename(single_view_path).split('.')[0][4:])
+        curr_view.mesh = context.scene.current_reference_mesh.name
         single_view_texture_path = os.path.join(context.scene.glaze_config.single_views_texture_folder, "view%04d.png" % curr_view.sv_id)
         # apply the paritial texture to meshes 
-        apply_texture(bpy.data.objects.get(REF_MESH_NAME), single_view_texture_path, suffix='ref')
-        self.report({'INFO'}, f"Selected Single View index: {curr_view.sv_id}")
+        apply_texture(bpy.data.objects.get(curr_view.mesh), single_view_texture_path, suffix='ref')
+        self.report({'INFO'}, f"Selected Single View index: {curr_view.sv_id} - Mesh {curr_view.mesh}")
         return {'FINISHED'}
 
 
@@ -142,13 +147,15 @@ class GLAZE_OT_create_auto_brushes(bpy.types.Operator):
             self.report({'ERROR'}, "Brush name cannot be empty")
             return {'CANCELLED'}
         scene = context.scene
-        if not brush_exists(scene, self.brush_name, context.scene.current_view.sv_id, brush_type):
+        if not brush_exists(scene, self.brush_name, context.scene.current_view.mesh, context.scene.current_view.sv_id, brush_type):
             brush = scene.glaze_brushes.add()
             brush.name = self.brush_name
+            brush.mesh = context.scene.current_view.mesh
             brush.brush_type = brush_type 
             brush.sv_id = context.scene.current_view.sv_id
             brush_info = {"brush_name": self.brush_name, 
                         "brush_type":brush_type,
+                        "brush_mesh": brush.mesh[:-4],
                         "sv_id":brush.sv_id}
             message = {"type": "add_brush",
                     "data": brush_info}
@@ -196,14 +203,16 @@ class GLAZE_OT_create_ref_brushes(bpy.types.Operator):
             self.report({'ERROR'}, "Reference Brush Requires Reference Face Selected before Creation.")
             return {'CANCELLED'}
         scene = context.scene
-        if not brush_exists(scene, self.brush_name, context.scene.current_view.sv_id, brush_type):
+        if not brush_exists(scene, self.brush_name, context.scene.current_view.mesh, context.scene.current_view.sv_id, brush_type):
             brush = scene.glaze_brushes.add()
             brush.name = self.brush_name
+            brush.mesh = context.scene.current_view.mesh
             brush.brush_type = brush_type 
             brush.sv_id = context.scene.current_view.sv_id
             brush_info = {"brush_name": self.brush_name, 
-                        "brush_type":brush_type,
-                        "sv_id":brush.sv_id,
+                        "brush_type": brush_type,
+                        "brush_mesh": brush.mesh[:-4],
+                        "sv_id": brush.sv_id,
                         "reference_faces": reference_faces}
             message = {"type": "add_brush",
                     "data": brush_info}

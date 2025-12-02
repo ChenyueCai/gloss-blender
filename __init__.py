@@ -87,6 +87,8 @@ def register():
             print(f"{cls.__name__} already registered, skipping.")
 
     bpy.types.Scene.glaze_config = bpy.props.PointerProperty(type=GlazeConfig)
+    bpy.types.Scene.current_paint_mesh = bpy.props.PointerProperty(name="Mesh", type=bpy.types.Object)
+    bpy.types.Scene.current_reference_mesh = bpy.props.PointerProperty(name="Mesh", type=bpy.types.Object)
     bpy.types.Scene.current_view = bpy.props.PointerProperty(type=GlazeSingleView)  
     bpy.types.Scene.current_brush = bpy.props.StringProperty(name="Current Brush Name", default="")
     bpy.types.Scene.glaze_brushes = bpy.props.CollectionProperty(type=GlazeBrush)
