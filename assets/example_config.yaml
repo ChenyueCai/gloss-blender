@@ -1,7 +1,7 @@
-mesh_file_path: /Users/chenyuecai/Desktop/assets/meshes/koi_fish/obj/scene.obj
-single_views_folder: /Users/chenyuecai/Desktop/assets/eval_cond_views/koi_fish
-single_views_cam_folder: /Users/chenyuecai/Desktop/assets/eval_metas/koi_fish_eval_meta
-single_views_texture_folder: /Users/chenyuecai/Desktop/assets/eval_textures_sr/koi_fish
+mesh_file_path: /Users/chenyuecai/Desktop/assets/meshes
+single_views_folder: /Users/chenyuecai/Desktop/assets/eval_cond_views
+single_views_cam_folder: /Users/chenyuecai/Desktop/assets/eval_metas
+single_views_texture_folder: /Users/chenyuecai/Desktop/assets/eval_textures_sr
 brushes_folder: /Users/chenyuecai/Desktop/assets/brushes
 preload_mode: test
 cache_folder: /Users/chenyuecai/Desktop/assets/cache

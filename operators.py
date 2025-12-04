@@ -4,11 +4,13 @@ import bpy
 import bmesh
 
 from .utils.config import load_glaze_config_from_yaml
-from .utils.mesh import load_mesh, duplicate_mesh, apply_texture
+from .utils.mesh import load_mesh, apply_texture, update_texture
 from .utils.image import list_images
 
 import time
 from .client import ws_client
+
+import re
 import torchvision
 
 
@@ -23,6 +25,11 @@ def set_view_center(obj, area):
             space.region_3d.view_location = obj.location
             space.region_3d.view_rotation = obj.matrix_world.to_quaternion()
             break
+        
+def base_name(name):
+    # Matches "thing", "thing.001", "thing.123", even "thing.something.001"
+    m = re.match(r"^(.*?)(?:\.\d+)?$", name)
+    return m.group(1)
 
 class GLAZE_OT_LoadReferenceMesh(bpy.types.Operator):
     """Load Reference Mesh"""
@@ -34,7 +41,7 @@ class GLAZE_OT_LoadReferenceMesh(bpy.types.Operator):
 
     def execute(self, context):
         print("Loading reference mesh:", self.filepath)
-        mesh_name = os.path.splitext(os.path.basename(self.filepath))[0] + "ref"
+        mesh_name = os.path.splitext(os.path.basename(self.filepath))[0] + "_ref"
         ref_mesh = load_mesh(mesh_path=self.filepath, name=mesh_name)  # You can change importer
         ref_mesh.location = (-1.5, 0, 0)
         context.scene.current_reference_mesh = ref_mesh
@@ -42,6 +49,10 @@ class GLAZE_OT_LoadReferenceMesh(bpy.types.Operator):
         areas = [a for a in screen.areas if a.type == 'VIEW_3D']
         left_area, right_area = areas[0], areas[1]
         set_view_center(ref_mesh, right_area)
+        mesh_info = {"mesh_name": base_name(ref_mesh.name)[:-4]}
+        message = {"type": "add_ref_mesh", 
+                   "data": mesh_info}
+        ws_client.send(message)
         return {'FINISHED'}
 
     def invoke(self, context, event):
@@ -67,6 +78,12 @@ class GLAZE_OT_LoadPaintMesh(bpy.types.Operator):
         areas = [a for a in screen.areas if a.type == 'VIEW_3D']
         left_area, right_area = areas[0], areas[1]
         set_view_center(paint_mesh, left_area)
+        # remove the basecolor slots
+        apply_texture(paint_mesh, None, suffix='paint')
+        mesh_info = {"mesh_name": base_name(paint_mesh.name)[:-4]}
+        message = {"type": "add_pnt_mesh", 
+                   "data": mesh_info}
+        ws_client.send(message)
         return {'FINISHED'}
 
     def invoke(self, context, event):
@@ -104,9 +121,8 @@ class GLAZE_OT_SetReference(bpy.types.Operator):
         curr_view = context.scene.current_view
         single_view_path = curr_view.image_path
         curr_view.sv_id = int(os.path.basename(single_view_path).split('.')[0][4:])
-        curr_view.mesh = context.scene.current_reference_mesh.name
-        single_view_texture_path = os.path.join(context.scene.glaze_config.single_views_texture_folder, "view%04d.png" % curr_view.sv_id)
-        # apply the paritial texture to meshes 
+        curr_view.mesh = base_name(context.scene.current_reference_mesh.name)
+        single_view_texture_path = os.path.join(context.scene.glaze_config.single_views_texture_folder, curr_view.mesh[:-4], "view%04d.png" % curr_view.sv_id)
         apply_texture(bpy.data.objects.get(curr_view.mesh), single_view_texture_path, suffix='ref')
         self.report({'INFO'}, f"Selected Single View index: {curr_view.sv_id} - Mesh {curr_view.mesh}")
         return {'FINISHED'}
@@ -128,7 +144,7 @@ class GLAZE_OT_LoadReferenceView(bpy.types.Operator):
         return {'FINISHED'}
 
 
-def brush_exists(scene, name, sv_id, brush_type):
+def brush_exists(scene, name):
     for b in scene.glaze_brushes:
         if b.name == name:
             return True
@@ -147,7 +163,7 @@ class GLAZE_OT_create_auto_brushes(bpy.types.Operator):
             self.report({'ERROR'}, "Brush name cannot be empty")
             return {'CANCELLED'}
         scene = context.scene
-        if not brush_exists(scene, self.brush_name, context.scene.current_view.mesh, context.scene.current_view.sv_id, brush_type):
+        if not brush_exists(scene, self.brush_name):
             brush = scene.glaze_brushes.add()
             brush.name = self.brush_name
             brush.mesh = context.scene.current_view.mesh
@@ -162,7 +178,7 @@ class GLAZE_OT_create_auto_brushes(bpy.types.Operator):
             ws_client.send(message)
             received = False
             start = time.time()
-            while not received and (time.time() - start) < 8:
+            while not received and (time.time() - start) < 20:
                 rec_message = ws_client.poll_bin_messages()
                 if rec_message is not None:
                     if rec_message.get("brush icon") is not None:
@@ -218,7 +234,7 @@ class GLAZE_OT_create_ref_brushes(bpy.types.Operator):
                     "data": brush_info}
             ws_client.send(message)
             start = time.time()
-            while not received and (time.time() - start) < 8:
+            while not received and (time.time() - start) < 20:
                 rec_message = ws_client.poll_bin_messages()
                 if rec_message is not None:
                     if rec_message.get("brush icon") is not None:
@@ -275,29 +291,40 @@ class GLAZE_OT_RemoveBrush():
     #TODO:
     pass
 
-class GLAZE_OT_SelectTargetFace(bpy.types.Operator):
-    bl_idname = "glaze.select_target_face"
-    bl_label = "Select Target Face"
+class GLAZE_OT_FillTexture(bpy.types.Operator):
+    bl_idname = "glaze.fill"
+    bl_label = "Fill Texture"
 
     def execute(self, context):
-        obj = bpy.data.objects.get(REF_MESH_NAME)
-        context.scene.target_faces.clear()
-        bm = bmesh.from_edit_mesh(obj.data)
-        bm.faces.ensure_lookup_table()
-        target_faces = []
-        for f in bm.faces:
-            if f.select:
-                entry = context.scene.target_faces.add()
-                entry.index = f.index
-                target_faces.append(f.index)
-                self.report({'INFO'}, f"Adding {f.index} as a target face")
-        
-        face_info = {"target_faces": target_faces,
-                     "brush_name": context.scene.current_brush}
-        message = {"type": "set_target_face",
-                   "data": face_info}
-        ws_client.send(message)
-        
+        obj = context.scene.current_paint_mesh
+        # support two modes of filling: face mode and view mode
+        # face mode
+        if context.scene.inference_view_settings.selection_mode == 'FACE':
+            context.scene.target_faces.clear()
+            bm = bmesh.from_edit_mesh(obj.data)
+            bm.faces.ensure_lookup_table()
+            target_faces = []
+            for f in bm.faces:
+                if f.select:
+                    entry = context.scene.target_faces.add()
+                    entry.index = f.index
+                    target_faces.append(f.index)
+                    self.report({'INFO'}, f"Adding {f.index} as a target face")
+            
+            fill_info = {"target_faces": target_faces,
+                         "mesh_name": base_name(context.scene.current_paint_mesh.name)[:-4],
+                        "brush_name": context.scene.current_brush}
+            message = {"type": "fill",
+                    "data": fill_info}
+            ws_client.send(message)
+            received = False
+            start = time.time()
+            while not received and (time.time() - start) < 20:
+                rec_message = ws_client.poll_bin_messages()
+                if rec_message is not None:
+                    if rec_message.get('texture') is not None:
+                        update_texture(obj, rec_message['texture'])
+                    received = True
         return {"FINISHED"}
 
     

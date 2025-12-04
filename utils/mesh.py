@@ -4,19 +4,21 @@ import gpu
 from pathlib import Path
 import mathutils
 
+import os
 import numpy as np
 import torch, torchvision
 
 
-def load_mesh(mesh_path, name="GlazeMesh"):
+def load_mesh(mesh_path, name="GlazeMesh", remove_existing=False):
     
     mesh_path = Path(mesh_path)
     if not mesh_path.exists():
         raise FileNotFoundError(mesh_path)
     
     # Remove existing object if exists
-    if name in bpy.data.objects:
-        bpy.data.objects.remove(bpy.data.objects[name], do_unlink=True)
+    if remove_existing:
+        if name in bpy.data.objects:
+            bpy.data.objects.remove(bpy.data.objects[name], do_unlink=True)
     existing_objs = set(bpy.data.objects)
     # Import OBJ
     bpy.ops.wm.obj_import(filepath=str(mesh_path))
@@ -125,10 +127,30 @@ def duplicate_image(orig_img, new_name):
     return new_img
 
 def apply_texture(obj, image_path, suffix=''):
-    image = bpy.data.images.load(image_path)
-    image.name = image.name.split(".")[0] +f".{suffix}.png"
-    if not obj.data or not hasattr(obj.data, "materials"):
-        return 
+    # if image_path is None, create new node and set image path
+    # if image_path exist but there is no prev bpy image, create one
+    # if image_path exist and prev bpy image exist, replace the previous image
+    
+    width, height = 4096, 4096
+    if image_path is None or not Path(image_path).exists():
+        image_name = obj.name + f".{suffix}.png"
+    else:
+        img_name = os.path.splitext(os.path.basename(image_path))[0]
+        image_name = f"{obj.name}_{img_name}.{suffix}.png"
+    image = None
+    if image_path is None or not Path(image_path).exists():
+        image = bpy.data.images.new(image_name, width=width, height=height, alpha=True, float_buffer=False)
+        pixels = np.zeros(width * height * 4, dtype=np.float32)  # RGBA=0,0,0,0
+        image.pixels.foreach_set(pixels)
+        image.update()
+    if image_path is not None and Path(image_path).exists():
+        texture_image =  bpy.data.images.get(image_name)
+        if texture_image is not None:
+            print(f"LOAD IN {image_path}")
+            return
+        else:
+            image = bpy.data.images.load(image_path)
+            image.name = image_name
     for mat in obj.data.materials:
         if mat is None or not mat.use_nodes:
             continue
@@ -165,21 +187,20 @@ def apply_texture(obj, image_path, suffix=''):
         links.new(new_tex.outputs['Color'], bsdf.inputs['Base Color'])
 
 
-def get_current_texture():
-    view_id = bpy.context.scene.current_view.sv_id
-    return bpy.data.images.get("view%04d.paint.png" % view_id)
+def get_current_texture(obj):
+    return bpy.data.images.get(f"{obj.name}.paint.png")
     
 
 
-def update_texture(texture: torch.Tensor, copy_prev=False):
+def update_texture(obj, texture: torch.Tensor, copy_prev=False):
     # reshape texture to 4096 * 4096
     print("updating texture...")
     h = w = 4096
     texture = torchvision.transforms.Resize((4096, 4096))(texture.permute(2,0,1).unsqueeze(0)).squeeze(0).permute(1,2,0)
     texture = np.array(texture)
-    current_texture = get_current_texture()
+    current_texture = get_current_texture(obj)
     buffer_size = h * w * 4 
-    mask = np.flipud(texture[..., 3:4])
+    mask = np.flipud(texture[..., 3:4]) # set to the target face only 
     new_texture_pixel = np.concatenate([np.flipud(texture[..., i:i+1]) for i in range(3)], axis=2)
     h, w = new_texture_pixel.shape[0], new_texture_pixel.shape[1]
 

@@ -57,7 +57,7 @@ class GLAZE_PT_Panel(bpy.types.Panel):
         col_left = split.column(align=True)
         col_left.label(text="Paint Mode", icon="USER")
         col_right = split.row(align=True)
-        col_right.operator("glaze.select_target_face", text="FILL") #TODO: change func to Fill
+        col_right.operator("glaze.fill", text="FILL") #TODO: change func to Fill
   
         # INFERENCE FACE MODE
         split = layout.split(factor=0.2)

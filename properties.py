@@ -8,7 +8,7 @@ import bpy.utils.previews
 import bpy
 
 class GlazeConfig(bpy.types.PropertyGroup):
-    mesh_file_path: bpy.props.StringProperty(name="Mesh File Path", subtype='FILE_PATH', default="")
+    mesh_folder: bpy.props.StringProperty(name="Mesh File Path", subtype='FILE_PATH', default="")
     single_views_folder: bpy.props.StringProperty(name="Single Views Folder", subtype='DIR_PATH', default="")
     single_views_cam_folder: bpy.props.StringProperty(name="Single Views Camera Folder", subtype='DIR_PATH', default="")
     single_views_texture_folder: bpy.props.StringProperty(name="Single Views Texture Folder", subtype='DIR_PATH', default="")
