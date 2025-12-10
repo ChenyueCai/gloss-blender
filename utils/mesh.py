@@ -7,7 +7,7 @@ import mathutils
 import os
 import numpy as np
 import torch, torchvision
-
+import cv2
 
 def load_mesh(mesh_path, name="GlazeMesh", remove_existing=False):
     
@@ -194,16 +194,19 @@ def get_current_texture(obj):
 
 def update_texture(obj, texture: torch.Tensor, copy_prev=False):
     # reshape texture to 4096 * 4096
+    # use a soft margin composite with current mask
     print("updating texture...")
     h = w = 4096
     texture = torchvision.transforms.Resize((4096, 4096))(texture.permute(2,0,1).unsqueeze(0)).squeeze(0).permute(1,2,0)
     texture = np.array(texture)
+    # get current texture and mask; create new texture pixels
     current_texture = get_current_texture(obj)
     buffer_size = h * w * 4 
-    mask = np.flipud(texture[..., 3:4]) # set to the target face only 
-    new_texture_pixel = np.concatenate([np.flipud(texture[..., i:i+1]) for i in range(3)], axis=2)
-    h, w = new_texture_pixel.shape[0], new_texture_pixel.shape[1]
-
+    # alpha channel of the rec texture 
+    texture_alpha = np.flipud(texture[..., 3:4]) # set to the target face only 
+    new_texture_arr = np.concatenate([np.flipud(texture[..., i:i+1]) for i in range(3)], axis=2)
+    h, w = new_texture_arr.shape[0], new_texture_arr.shape[1]
+    print("here")
     try:
         buffer_size = h * w * 4 
         current_texture_pixels = np.empty(buffer_size, dtype=np.float32)
@@ -227,12 +230,77 @@ def update_texture(obj, texture: torch.Tensor, copy_prev=False):
             texture_copy.pixels.foreach_set(current_texture_pixels)
             texture_copy.update()
         
-        color = mask * new_texture_pixel + current_texture_pixels.reshape(h, w, 4)[..., :3] * (1 - mask)
-        alpha = mask + current_texture_pixels.reshape(h, w, 4)[..., 3:4] * (1 - mask)
+        current_texture_arr = current_texture_pixels.reshape(h, w, 4)
+        current_texture_alpha = current_texture_arr[..., 3:4]
+        mask = (texture_alpha - current_texture_alpha).clip(0.0,1.0)
+        print("here")
+        mask_soft = expand_mask_soft(mask[:, :,0], max_distance=15)[:,:,np.newaxis]
+        w_inpaint = mask_soft * current_texture_alpha * texture_alpha + mask
+        
+        color = w_inpaint * new_texture_arr + current_texture_arr[..., :3] * (1 - w_inpaint)
+        print("here")
+        alpha = mask + current_texture_arr[..., 3:4] * (1 - mask)
         pixels = np.concatenate([color, alpha], axis=2).ravel()
+        
         buffer = gpu.types.Buffer('FLOAT', buffer_size, pixels)
         current_texture.pixels.foreach_set(buffer)
         current_texture.update()
     except Exception as e:
         print(f"Texture update failed: {e}")
         
+
+def expand_mask_soft(mask_arr, max_distance=20):
+    """
+    Expands a binary mask outward with a soft gradient.
+    
+    Args:
+        mask (torch.Tensor): binary mask (0 or 1), in the shape of B C H W
+        max_distance (int): how far the soft gradient extends
+    
+    Returns:
+        torch.Tensor: non binary soft mask with values in [0,1], , in the shape of B C H W
+    """
+    mask_arr = mask_arr.astype(np.uint8)
+
+    # Compute distance transform from the background
+    dist = cv2.distanceTransform(1 - mask_arr, cv2.DIST_L2, 5)
+
+    # Clip distances to max_distance
+    dist = np.clip(dist, 0, max_distance)
+
+    # Normalize to [0,1] and invert (inside=1, outside decreases)
+    soft_mask = np.exp(-dist / max_distance * 3)  # exponential falloff
+    soft_mask = np.clip(soft_mask, 0.0, 1.0)
+
+    return soft_mask
+
+
+def composite_inpaint(texture_existing, texture_inpaint,
+                      mask_existing, mask_inpaint, mask_fill, 
+                      soft=True, soft_margin=20):
+    """ 
+    Composite the existing texture map with inpaint texture over regions that mask_fill covers, 
+    Expand the mask_fill with soft margin if needed
+    
+    Args:
+        texture_existing (_type_): existing texture map in B 4 H W, range(0,1)
+        texture_inpaint (_type_): inpaint texture map in B 4 H W, range(0,1)
+        mask_existing (_type_): binary mask of the existing texture (0 or 1), in the shape of B C H W
+        mask_inpaint (_type_): binary mask of the inpaint texture (0 or 1), in the shape of B C H W
+        mask_fill (_type_): binary mask to be filled (0 or 1), in the shape of B C H W
+        soft (bool, optional): _description_. Defaults to True.
+        soft_margin (int, optional): _description_. Defaults to 20.
+
+    Returns:
+        _type_: updated texture map, range(0,1) for all channels
+    """
+    
+    if soft:
+        mask_fill_soft = expand_mask_soft(mask_fill, max_distance=soft_margin)
+        w_inpaint = (mask_fill_soft * mask_existing * mask_inpaint + mask_fill)
+    else:
+        w_inpaint = mask_fill
+    composite = texture_inpaint * w_inpaint + texture_existing * (1.0 - w_inpaint)
+    alpha = mask_existing + mask_fill
+    composite[:, 3, ...] = alpha
+    return composite

@@ -4,14 +4,16 @@ import bpy
 import bmesh
 
 from .utils.config import load_glaze_config_from_yaml
-from .utils.mesh import load_mesh, apply_texture, update_texture
+from .utils.mesh import load_mesh, apply_texture, update_texture, get_current_texture
 from .utils.image import list_images
+from .utils.io import to_binary, from_binary
 
 import time
 from .client import ws_client
 
 import re
-import torchvision
+import torchvision, torch
+import numpy as np
 
 
 REF_MESH_NAME = "GlazeMesh_Ref"
@@ -80,7 +82,7 @@ class GLAZE_OT_LoadPaintMesh(bpy.types.Operator):
         set_view_center(paint_mesh, left_area)
         # remove the basecolor slots
         apply_texture(paint_mesh, None, suffix='paint')
-        mesh_info = {"mesh_name": base_name(paint_mesh.name)[:-4]}
+        mesh_info = {"mesh_name": base_name(paint_mesh.name)[:-4], "paint_mesh_name": paint_mesh.name}
         message = {"type": "add_pnt_mesh", 
                    "data": mesh_info}
         ws_client.send(message)
@@ -204,7 +206,7 @@ class GLAZE_OT_create_ref_brushes(bpy.types.Operator):
         if not self.brush_name:
             self.report({'ERROR'}, "Brush name cannot be empty")
             return {'CANCELLED'}
-        obj = bpy.data.objects.get(REF_MESH_NAME)
+        obj = context.scene.current_reference_mesh
         context.scene.reference_faces.clear()
         bm = bmesh.from_edit_mesh(obj.data)
         bm.faces.ensure_lookup_table()
@@ -219,7 +221,7 @@ class GLAZE_OT_create_ref_brushes(bpy.types.Operator):
             self.report({'ERROR'}, "Reference Brush Requires Reference Face Selected before Creation.")
             return {'CANCELLED'}
         scene = context.scene
-        if not brush_exists(scene, self.brush_name, context.scene.current_view.mesh, context.scene.current_view.sv_id, brush_type):
+        if not brush_exists(scene, self.brush_name):
             brush = scene.glaze_brushes.add()
             brush.name = self.brush_name
             brush.mesh = context.scene.current_view.mesh
@@ -233,6 +235,7 @@ class GLAZE_OT_create_ref_brushes(bpy.types.Operator):
             message = {"type": "add_brush",
                     "data": brush_info}
             ws_client.send(message)
+            received = False
             start = time.time()
             while not received and (time.time() - start) < 20:
                 rec_message = ws_client.poll_bin_messages()
@@ -242,7 +245,7 @@ class GLAZE_OT_create_ref_brushes(bpy.types.Operator):
                         brush_dir = os.path.join(bpy.context.scene.glaze_config.brushes_folder, f"{brush.name}")    
                         os.makedirs(brush_dir, exist_ok=True)
                         torchvision.utils.save_image(brush_icon.permute(2, 0, 1), os.path.join(brush_dir, "icon.png"))  
-                    received = True    
+                    received = True 
         else:
             self.report({'INFO'}, f"already created : {self.brush_name}")
         return {'FINISHED'}
@@ -294,6 +297,7 @@ class GLAZE_OT_RemoveBrush():
 class GLAZE_OT_FillTexture(bpy.types.Operator):
     bl_idname = "glaze.fill"
     bl_label = "Fill Texture"
+    bl_options = {'REGISTER', 'UNDO'} 
 
     def execute(self, context):
         obj = context.scene.current_paint_mesh
@@ -312,21 +316,84 @@ class GLAZE_OT_FillTexture(bpy.types.Operator):
                     self.report({'INFO'}, f"Adding {f.index} as a target face")
             
             fill_info = {"target_faces": target_faces,
-                         "mesh_name": base_name(context.scene.current_paint_mesh.name)[:-4],
+                         "mesh_name": base_name(context.scene.current_paint_mesh.name),
                         "brush_name": context.scene.current_brush}
-            message = {"type": "fill",
+            message = {"type": "fill_face",
                     "data": fill_info}
-            ws_client.send(message)
-            received = False
-            start = time.time()
-            while not received and (time.time() - start) < 20:
-                rec_message = ws_client.poll_bin_messages()
-                if rec_message is not None:
-                    if rec_message.get('texture') is not None:
-                        update_texture(obj, rec_message['texture'])
+        if context.scene.inference_view_settings.selection_mode == 'VIEW':
+            fill_info = {"target_view": view, "view_mask": view_mask,
+                         "mesh_name": base_name(context.scene.current_paint_mesh.name)[:-4],
+                         "brush_name": context.scene.current_brush
+                         } #TODO: 1. how to send these together 2. how to obtain the view and mask
+            message = {"type": "fill_view",
+                    "data": fill_info}
+        ws_client.send(message)
+        received = False
+        start = time.time()
+        while not received and (time.time() - start) < 20:
+            rec_message = ws_client.poll_bin_messages()
+            if rec_message is not None:
+                if rec_message.get('texture') is not None:
+                    update_texture(obj, rec_message['texture'])
+                if rec_message.get('texture-last') is not None:
+                    update_texture(obj, rec_message['texture-last'])
                     received = True
         return {"FINISHED"}
 
+class GLAZE_OT_FillALLTexture(bpy.types.Operator):
+    bl_idname = "glaze.fill_all"
+    bl_label = "Fill All Texture"
+    bl_options = {'REGISTER', 'UNDO'} 
+
+    def execute(self, context):
+        obj = context.scene.current_paint_mesh
+        # fill all faces that have not been painted yet
+
+        fill_info = {"target_faces": target_faces,
+                        "mesh_name": base_name(context.scene.current_paint_mesh.name),
+                    "brush_name": context.scene.current_brush}
+        message = {"type": "fill_all",
+                "data": fill_info}
+        ws_client.send(message)
+        received = False
+        start = time.time()
+        while not received and (time.time() - start) < 20:
+            rec_message = ws_client.poll_bin_messages()
+            if rec_message is not None:
+                if rec_message.get('texture') is not None:
+                    update_texture(obj, rec_message['texture'])
+                if rec_message.get('texture-last') is not None:
+                    update_texture(obj, rec_message['texture-last'])
+                    received = True
+        return {"FINISHED"}
+
+class GLAZE_OT_SetPaintTexture(bpy.types.Operator):
+    bl_idname = "glaze.set_texture"
+    bl_label = "Sync Texture with server"
+    bl_options = {'REGISTER', 'UNDO'} 
+    
+    def execute(self, context):
+        # send the current texture to server
+        h = w = 4096
+        buffer_size = h * w * 4 
+        paint_obj = context.scene.current_paint_mesh
+        current_paint_texture = get_current_texture(paint_obj)
+        current_texture_pixels = np.empty(buffer_size, dtype=np.float32)
+        current_paint_texture.pixels.foreach_get(current_texture_pixels)
+        message = {"texture": torch.tensor(current_texture_pixels.reshape(h, w, 4))}
+        message = to_binary(message)
+        ws_client.send(message)
+        return {"FINISHED"}
+
+
+class GLAZE_OT_Undo_Fill(bpy.types.Operator):
+    bl_idname = "glaze.undo_fill"
+    bl_label = "Undo Fill"
+    bl_options = {'REGISTER', 'UNDO'} 
+    
+    def execute(self, context):
+        # 
+        pass
     
 class GLAZE_OT_SelectReferenceFace(bpy.types.Operator):
     bl_idname = "glaze.select_reference_face"

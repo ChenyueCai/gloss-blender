@@ -6,12 +6,12 @@ import json
 import os
 import time
 import torchvision
-
+from typing import Dict
 from .utils.mesh import update_texture
-from .utils.io import from_binary
+from .utils.io import from_binary, to_binary
 
 
-SERVER_URL = "ws://localhost:10023/websocket"
+SERVER_URL = "ws://localhost:10011/websocket"
 
 
 class WSClient:
@@ -43,7 +43,7 @@ class WSClient:
     async def connect(self):
         """Try connecting to the websocket."""
         try:
-            self.ws = await websockets.connect(self.uri, max_size=40 * 1024 * 1024)
+            self.ws = await websockets.connect(self.uri, max_size=400 * 4096*4096)
             print("WS connected")
         except Exception as e:
             print("WS connect failed:", e)
@@ -62,8 +62,10 @@ class WSClient:
                     continue
 
             try:
-                await self.ws.send(json.dumps(data))
-
+                if isinstance(data, Dict):
+                    await self.ws.send(json.dumps(data))
+                else:
+                    await self.ws.send(data)
             except websockets.ConnectionClosed:
                 print("Send failed — WS closed, reconnecting...")
                 self.ws = None

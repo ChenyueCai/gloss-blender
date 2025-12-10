@@ -56,9 +56,17 @@ class GLAZE_PT_Panel(bpy.types.Panel):
         split = layout.split(factor=0.2)
         col_left = split.column(align=True)
         col_left.label(text="Paint Mode", icon="USER")
+        # Right button region
         col_right = split.row(align=True)
-        col_right.operator("glaze.fill", text="FILL") #TODO: change func to Fill
-  
+
+        # Column 1: FILL
+        col_fill = col_right.column(align=True)
+        col_fill.operator("glaze.fill", text="FILL")
+
+        # Column 2: FILL_ALL
+        col_fill_all = col_right.column(align=True)
+        col_fill_all.operator("glaze.fill_all", text="FILL ALL 🪣")
+        
         # INFERENCE FACE MODE
         split = layout.split(factor=0.2)
         col_left = split.column(align=True)
@@ -66,6 +74,9 @@ class GLAZE_PT_Panel(bpy.types.Panel):
         props = context.scene.inference_view_settings
         col_right = split.row(align=True)
         col_right.prop(props, "selection_mode", expand=True)
+        
+        row = layout.row(align=True)
+        row.operator("glaze.set_texture", text="Set Texture")
         
         # CREATE BRUSHES
         row = layout.row(align=True)
