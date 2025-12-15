@@ -8,6 +8,7 @@ import os
 import numpy as np
 import torch, torchvision
 import cv2
+import re
 
 def load_mesh(mesh_path, name="GlazeMesh", remove_existing=False):
     
@@ -51,7 +52,7 @@ def normalize_mesh(obj, normalize=True, eps=1e-6):
 
     # Center point = midpoint of bounding box
     vmid = (vmin + vmax) * 0.5
-    print(vmid)
+
 
     # Denominator for normalization
     if normalize:
@@ -191,8 +192,15 @@ def get_current_texture(obj):
     return bpy.data.images.get(f"{obj.name}.paint.png")
     
 
+def clear_texture(obj):
+    current_texture = get_current_texture(obj)
+    h = w = 4096
+    buffer_size = h * w * 4 
+    pixels = np.zeros(buffer_size, dtype=np.float32) 
+    buffer = gpu.types.Buffer('FLOAT', buffer_size, pixels)
+    current_texture.pixels.foreach_set(buffer)
 
-def update_texture(obj, texture: torch.Tensor, copy_prev=False):
+def update_texture(obj, texture: torch.Tensor):
     # reshape texture to 4096 * 4096
     # use a soft margin composite with current mask
     print("updating texture...")
@@ -206,39 +214,46 @@ def update_texture(obj, texture: torch.Tensor, copy_prev=False):
     texture_alpha = np.flipud(texture[..., 3:4]) # set to the target face only 
     new_texture_arr = np.concatenate([np.flipud(texture[..., i:i+1]) for i in range(3)], axis=2)
     h, w = new_texture_arr.shape[0], new_texture_arr.shape[1]
-    print("here")
+    
     try:
         buffer_size = h * w * 4 
         current_texture_pixels = np.empty(buffer_size, dtype=np.float32)
         current_texture.pixels.foreach_get(current_texture_pixels)
         
-        if copy_prev:
-            print("copying prev texture")
-            base_name = current_texture.name + " history"
-            name = base_name
-            i = 1
-            existing_names = {img.name for img in bpy.data.images}
-            while name in existing_names:
-                name = f"{base_name}.{i:03d}"
-                i += 1
-            texture_copy = bpy.data.images.new(
-                name=name,
-                width=w, height=h,
-                alpha=current_texture.alpha_mode != 'NONE',   # True if original has alpha
-                float_buffer=current_texture.is_float         # True if original is float
-            )
-            texture_copy.pixels.foreach_set(current_texture_pixels)
-            texture_copy.update()
+        print("copying prev texture")
+        base_name = current_texture.name + " history"
+        k = 0
+        existing_names = {img.name for img in bpy.data.images}
+        pattern = re.compile(re.escape(base_name) + r"\.(\d{3})$")
+        for name in existing_names:
+            m = pattern.match(name)
+            if m:
+                d = int(m.group(1))
+                if d > k:
+                    k = d
+        k+=1
+        name = f"{base_name}.{k:03d}"
+        print(name)
+        texture_copy = bpy.data.images.new(
+            name=name,
+            width=w, height=h,
+            alpha=current_texture.alpha_mode != 'NONE',   # True if original has alpha
+            float_buffer=current_texture.is_float         # True if original is float
+        )
+        texture_copy.pixels.foreach_set(current_texture_pixels)
+        texture_copy.update()
+        
+        keep_latest_two_history(current_texture)      
         
         current_texture_arr = current_texture_pixels.reshape(h, w, 4)
         current_texture_alpha = current_texture_arr[..., 3:4]
         mask = (texture_alpha - current_texture_alpha).clip(0.0,1.0)
-        print("here")
+        
         mask_soft = expand_mask_soft(mask[:, :,0], max_distance=15)[:,:,np.newaxis]
         w_inpaint = mask_soft * current_texture_alpha * texture_alpha + mask
         
         color = w_inpaint * new_texture_arr + current_texture_arr[..., :3] * (1 - w_inpaint)
-        print("here")
+        
         alpha = mask + current_texture_arr[..., 3:4] * (1 - mask)
         pixels = np.concatenate([color, alpha], axis=2).ravel()
         
@@ -247,7 +262,196 @@ def update_texture(obj, texture: torch.Tensor, copy_prev=False):
         current_texture.update()
     except Exception as e:
         print(f"Texture update failed: {e}")
+
+
+
+def get_last_texture_name(texture):
+    
+    base = texture.name + " history"
+    imgs = bpy.data.images
+
+    # Pattern like: "BaseName history.001"
+    pattern = re.compile(re.escape(base) + r"\.(\d{3})$")
+    
+    max_n = -1
+    for img in imgs:
+        m = pattern.search(img.name)
+        if m:
+            num = int(m.group(1))
+            if num > max_n:
+                max_n = num
+    if max_n == -1:
+        return None
+    else:
+                
+        last_name = f"{base}.{max_n:03d}"
+        return last_name
+
+
+def undo_texture():
+    # --- CONFIG ---
+    material = bpy.context.object.active_material
+
+    # ------------------------------
+
+    # Locate the Principled BSDF and its Base Color image node
+    nodes = material.node_tree.nodes
+    links = material.node_tree.links
+
+    # Find Principled BSDF
+    principled = None
+    for n in nodes:
+        if n.type == "BSDF_PRINCIPLED":
+            principled = n
+            break
+
+    if not principled:
+        raise Exception("No Principled BSDF found")
+
+    # Find linked Image Texture node
+    base_color_input = principled.inputs["Base Color"]
+    old_image_node = None
+
+    for link in base_color_input.links:
+        if link.from_node.type == "TEX_IMAGE":
+            old_image_node = link.from_node
+            break
+
+    if not old_image_node:
+        raise Exception("No Image Texture node connected to Base Color")
+
+    old_img = old_image_node.image
+    old_name = old_img.name
+    new_img_name = get_last_texture_name(old_image_node.image)
+    
+    if new_img_name is None:
+        raise Exception(f"Reached max undo limit")
+
+    # Get the new image
+    new_img = bpy.data.images.get(new_img_name)
+    if not new_img:
+        raise Exception(f"Image '{new_img_name}' not found")
+
+    # -----------------------------------------------------
+    # 🔄 Replace the image
+    # -----------------------------------------------------
+    old_image_node.image = new_img   # swap image
+
+    replace_image(old_img, new_img)
+
+
+def replace_image(old_img, new_img):
+    old_name = old_img.name
+    old_img.user_clear()
+    if old_img.packed_file:
+        try:
+            old_img.unpack(method='REMOVE')
+        except:
+            pass
+    bpy.data.images.remove(old_img)
+    new_img.name = old_name
         
+
+def keep_latest_two_history(current_tex):
+    """
+    Keep only the two most recent history textures for the given image.
+    History textures follow the format:
+        <image.name> history.NNN
+    """
+    base = current_tex.name + " history"
+    imgs = bpy.data.images
+
+    # Pattern for matching numbered histories
+    pattern = re.compile(re.escape(base) + r"\.(\d{3})$")
+
+    # Collect all matches (img, number)
+    histories = []
+    for img in imgs:
+        m = pattern.search(img.name)
+        if m:
+            histories.append((img, int(m.group(1))))
+
+    # If fewer than 2 exist, nothing to delete
+    if len(histories) <= 2:
+        return
+
+    # Sort by number (descending) — newest first
+    histories.sort(key=lambda x: x[1], reverse=True)
+
+    # Keep only the first 2, delete the rest
+    to_delete = histories[2:]
+
+    for img, n in to_delete:
+        img.user_clear()
+        try:
+            if img.packed_file:
+                img.unpack(method='REMOVE')
+        except:
+            pass
+        bpy.data.images.remove(img)
+
+
+
+def find_principled_and_normal_node(mat):
+    """Return (principled_node, normal_node) or (None, None)."""
+    if not mat or not mat.use_nodes:
+        return None, None
+
+    nodes = mat.node_tree.nodes
+
+    principled = None
+    normal = None
+
+    for n in nodes:
+        if n.type == "BSDF_PRINCIPLED":
+            principled = n
+        elif n.type == "NORMAL_MAP":
+            normal = n
+
+    return principled, normal
+
+
+def is_normal_connected(mat):
+    """Return True if Normal Map node is connected to Principled Normal input."""
+    principled, normal = find_principled_and_normal_node(mat)
+    if not principled or not normal:
+        return False
+
+    for link in principled.inputs["Normal"].links:
+        if link.from_node == normal:
+            return True
+
+    return False
+
+
+def connect_normal(mat):
+    """Connect Normal Map → Principled Normal."""
+    principled, normal = find_principled_and_normal_node(mat)
+    if not principled or not normal:
+        return
+
+    nt = mat.node_tree
+
+    # Clear any existing links to Normal input
+    for link in list(principled.inputs["Normal"].links):
+        nt.links.remove(link)
+
+    # Create the connection
+    nt.links.new(normal.outputs["Normal"], principled.inputs["Normal"])
+
+
+def disconnect_normal(mat):
+    """Disconnect anything going to the Principled Normal input."""
+    principled, normal = find_principled_and_normal_node(mat)
+    if not principled:
+        return
+
+    nt = mat.node_tree
+
+    for link in list(principled.inputs["Normal"].links):
+        nt.links.remove(link)
+
+
 
 def expand_mask_soft(mask_arr, max_distance=20):
     """

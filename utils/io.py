@@ -14,7 +14,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
+import math
 import collections
 import json
 import logging
@@ -377,6 +377,48 @@ def _list_to_binary(in_list, initial_offset=0):
         result += value_to_binary(value, initial_offset=initial_offset + len(result))
     return result
 
+def split_tensor(tensor, max_chunk_bytes=1_000_000):
+    """
+    Returns a list of smaller tensors, each <= max_chunk_bytes.
+    """
+    bytes_per_elem = tensor.element_size()        # e.g., float32 = 4 bytes
+    total_elems = tensor.numel()
+    elems_per_chunk = max_chunk_bytes // bytes_per_elem
+    elems_per_chunk = max(1, elems_per_chunk)
+
+    flat = tensor.contiguous().view(-1)
+
+    chunks = [
+        flat[i:i+elems_per_chunk].clone()
+        for i in range(0, total_elems, elems_per_chunk)
+    ]
+
+    return chunks
+
+def send_large_image(name: str, task_name: str, image: np.ndarray, chunk_size: int = 10_000_000):
+    """
+    Send a large image through WebSocket in multiple binary chunks.
+    
+    Parameters:
+        ws          : websocket connection
+        name        : image name string
+        image_bytes : full binary data of the image
+        chunk_size  : size in bytes (default: 1MB)
+    """
+    chunks = split_tensor(torch.from_numpy(image), max_chunk_bytes=chunk_size)
+    total_chunks = len(chunks)
+    msgs = []
+    for idx in range(total_chunks):
+        chunk = chunks[idx]
+        msgs.append({
+            "type": "image",
+            "name": name,
+            "task_name": task_name,
+            "chunk_index": idx,
+            "chunk_total": total_chunks,
+            "image": chunk,
+        })
+    return msgs  # your binary-packer function
 
 
 # inference_response = {'new_texture': my_tensor}

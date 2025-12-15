@@ -11,7 +11,7 @@ from .utils.mesh import update_texture
 from .utils.io import from_binary, to_binary
 
 
-SERVER_URL = "ws://localhost:10011/websocket"
+SERVER_URL = "ws://localhost:10012/websocket"
 
 
 class WSClient:
@@ -35,6 +35,7 @@ class WSClient:
         self._running = False
         self.send_queue = asyncio.Queue() 
         self.receive_queue = [] # thread-safe list for Blender main thread
+        self.ws_chunks = []
 
     # ---------------------------------------------------------
     # Connection + Workers
@@ -88,6 +89,8 @@ class WSClient:
             try:
                 msg = await self.ws.recv()
                 self.receive_queue.append(msg)
+                if isinstance(msg, bytes):
+                    self.ws_chunks.append(msg)
 
             except websockets.ConnectionClosed:
                 print("Receive failed — WS closed, reconnecting...")
@@ -204,8 +207,11 @@ class WSClient:
         while self.receive_queue:
             message = self.receive_queue.pop(0)
             if isinstance(message, bytes):
-                message = from_binary(message)
                 return message
+        return None
+            # if isinstance(message, bytes):
+            #     message = from_binary(message)
+            #     return message
 
 
 # ---------------------------------------------------------

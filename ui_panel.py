@@ -2,10 +2,12 @@ import bpy
 import os
 import bpy.utils.previews
 from .utils.image import get_preview, get_brush_preview
+from .client import ws_client
+from .utils.mesh import is_normal_connected
 #from .utils.brush import load_brushes_from_folder, get_brush_preview
 
 
-
+        
 class GLAZE_PT_Panel(bpy.types.Panel):
     bl_label = "GlazePanel"
     bl_idname = "GLAZE_PT_Panel"
@@ -17,6 +19,7 @@ class GLAZE_PT_Panel(bpy.types.Panel):
         layout = self.layout
         row = layout.row()
         row.label(text="Utilities", icon="MESH_CUBE")
+    
         layout.operator("glaze.load_config", text="Load Glaze Config")
         layout.operator("glaze.glaze_reload_addon", icon="FILE_REFRESH")
         
@@ -74,9 +77,22 @@ class GLAZE_PT_Panel(bpy.types.Panel):
         props = context.scene.inference_view_settings
         col_right = split.row(align=True)
         col_right.prop(props, "selection_mode", expand=True)
+        layout.prop(context.scene, "update_texture_4k")
         
+        row = layout.row()
+        col1 = row.column()
+        col2 = row.column()
+        col3 = row.column()
+        col1.operator("glaze.undo_texture", text="Undo")
+        col2.operator("glaze.set_texture", text="Set Texture")
+        col3.operator("glaze.clear_texture", text="Clear All Texture")
+        
+        mat = context.object.active_material
         row = layout.row(align=True)
-        row.operator("glaze.set_texture", text="Set Texture")
+        row.operator("material.toggle_normal_map",
+                     text=("Disconnect Normal" if mat and is_normal_connected(mat)
+                           else "Connect Normal"),
+                     icon="NORMALS_VERTEX")
         
         # CREATE BRUSHES
         row = layout.row(align=True)
@@ -98,9 +114,15 @@ class GLAZE_PT_Panel(bpy.types.Panel):
                 col = grid.column(align=True)
             icon_path = os.path.join(context.scene.glaze_config.brushes_folder, f"{brush.name}", "icon.png")  
             icon_id = get_brush_preview(icon_path) #brush.preview.icon_id if brush.preview else 0 #TODO:
+            # op = col.operator(
+            #     "glaze.show_brush",
+            #     text="",                  # icon-only
+            #     icon_value=icon_id
+            # )
+            # op.brush_name = brush.name
             op = col.operator(
-                "glaze.show_brush",
-                text="",                  # icon-only
+                "glaze.show_brush_menu",
+                text="",
                 icon_value=icon_id
             )
             op.brush_name = brush.name
