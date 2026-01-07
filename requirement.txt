@@ -1,0 +1,5 @@
+--extra-index-url https://download.pytorch.org/whl/cpu
+opencv-python
+torch
+torchvision
+numpy

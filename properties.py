@@ -1,10 +1,6 @@
 from bpy.props import StringProperty, IntProperty,PointerProperty
 from bpy.types import PropertyGroup, Panel, Operator
 import bpy.utils.previews
-
-# global variables 
-# all brushes
-# ---- Property group to hold selected image ---- #TODO:
 import bpy
 
 class GlazeConfig(bpy.types.PropertyGroup):
@@ -45,8 +41,7 @@ class InferenceViewSettings(bpy.types.PropertyGroup):
     selection_mode: bpy.props.EnumProperty(
         name="Mode",
         items=[
-            ('FACE', "Face Mode", ""),
-            ('VIEW', "View Mode", "")
+            ('FACE', "Face Mode", "")
         ],
-        default='VIEW'
+        default='FACE'
     )

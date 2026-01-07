@@ -4,10 +4,8 @@ import bpy.utils.previews
 from .utils.image import get_preview, get_brush_preview
 from .client import ws_client
 from .utils.mesh import is_normal_connected
-#from .utils.brush import load_brushes_from_folder, get_brush_preview
 
 
-        
 class GLAZE_PT_Panel(bpy.types.Panel):
     bl_label = "GlazePanel"
     bl_idname = "GLAZE_PT_Panel"
@@ -29,7 +27,7 @@ class GLAZE_PT_Panel(bpy.types.Panel):
         row = layout.row(align=True)
         row.operator("glaze.load_reference_mesh", text="Load Reference")
         row.operator("glaze.load_paint_mesh", text="Load Paint")
-        
+
         # LOAD REF IMAGE
         split = layout.split(factor=0.6)
         col_left = split.column(align=True)
@@ -64,19 +62,17 @@ class GLAZE_PT_Panel(bpy.types.Panel):
 
         # Column 1: FILL
         col_fill = col_right.column(align=True)
-        col_fill.operator("glaze.fill", text="FILL")
+        col_fill.operator("glaze.fill", text="FILL FACE")
 
-        # Column 2: FILL_ALL
-        col_fill_all = col_right.column(align=True)
-        col_fill_all.operator("glaze.fill_all", text="FILL ALL 🪣")
+        # Column 2: FILL_ALL #TODO: BUGGY!
+        col_clear = col_right.column(align=True)
+        col_clear.operator("glaze.fill_all", text="FILL ALL")
+        
+        # Column 3: CLEAR TEXTURE
+        col_clear = col_right.column(align=True)
+        col_clear.operator("glaze.clear_texture", text="CLEAR FACE")
         
         # INFERENCE FACE MODE
-        split = layout.split(factor=0.2)
-        col_left = split.column(align=True)
-        col_left.label(text="View Selection")
-        props = context.scene.inference_view_settings
-        col_right = split.row(align=True)
-        col_right.prop(props, "selection_mode", expand=True)
         layout.prop(context.scene, "update_texture_4k")
         
         row = layout.row()
@@ -85,7 +81,7 @@ class GLAZE_PT_Panel(bpy.types.Panel):
         col3 = row.column()
         col1.operator("glaze.undo_texture", text="Undo")
         col2.operator("glaze.set_texture", text="Set Texture")
-        col3.operator("glaze.clear_texture", text="Clear All Texture")
+        col3.operator("glaze.clear_all_texture", text="Clear All Texture")
         
         mat = context.object.active_material
         row = layout.row(align=True)
@@ -113,13 +109,7 @@ class GLAZE_PT_Panel(bpy.types.Panel):
             else:
                 col = grid.column(align=True)
             icon_path = os.path.join(context.scene.glaze_config.brushes_folder, f"{brush.name}", "icon.png")  
-            icon_id = get_brush_preview(icon_path) #brush.preview.icon_id if brush.preview else 0 #TODO:
-            # op = col.operator(
-            #     "glaze.show_brush",
-            #     text="",                  # icon-only
-            #     icon_value=icon_id
-            # )
-            # op.brush_name = brush.name
+            icon_id = get_brush_preview(icon_path)
             op = col.operator(
                 "glaze.show_brush_menu",
                 text="",
@@ -142,7 +132,4 @@ class GLAZE_PT_Panel(bpy.types.Panel):
         op.brush_name = context.scene.new_brush_name
         
         split_layout.column().operator("glaze.clear_brush_lib", text="Clear All")
-        
-        # # # update the mesh texture once the server send information
-        # layout.operator("glaze.update_texture", text="Update Texture")
-    
+     

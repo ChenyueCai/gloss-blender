@@ -9,9 +9,9 @@ import torchvision
 from typing import Dict
 from .utils.mesh import update_texture
 from .utils.io import from_binary, to_binary
+import queue
 
-
-SERVER_URL = "ws://localhost:10012/websocket"
+SERVER_URL = "ws://localhost:10014/websocket"
 
 
 class WSClient:
@@ -35,7 +35,7 @@ class WSClient:
         self._running = False
         self.send_queue = asyncio.Queue() 
         self.receive_queue = [] # thread-safe list for Blender main thread
-        self.ws_chunks = []
+        self.ws_chunks = queue.Queue() 
 
     # ---------------------------------------------------------
     # Connection + Workers
@@ -90,7 +90,7 @@ class WSClient:
                 msg = await self.ws.recv()
                 self.receive_queue.append(msg)
                 if isinstance(msg, bytes):
-                    self.ws_chunks.append(msg)
+                    self.ws_chunks.put(msg)
 
             except websockets.ConnectionClosed:
                 print("Receive failed — WS closed, reconnecting...")
@@ -212,6 +212,16 @@ class WSClient:
             # if isinstance(message, bytes):
             #     message = from_binary(message)
             #     return message
+    
+    # def poll_ws_chunks(self, max_items=100):
+    #     """Called from Blender main thread"""
+    #     chunks = []
+    #     for _ in range(max_items):
+    #         try:
+    #             chunks.append(self.ws_chunks.get_nowait())
+    #         except asyncio.QueueEmpty:
+    #             break
+    #     return chunks
 
 
 # ---------------------------------------------------------
