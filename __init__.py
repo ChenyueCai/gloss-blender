@@ -22,14 +22,15 @@ from . import ui_panel
 from .utils import io, config, image, mesh, brush
 
 importlib.reload(client)
+importlib.reload(io)
+importlib.reload(mesh)
 importlib.reload(operators)
 importlib.reload(properties)
 importlib.reload(ui_panel)
 importlib.reload(config)
 importlib.reload(image)
-importlib.reload(mesh)
 importlib.reload(brush)
-importlib.reload(io)
+
 
 from .client import register_client, unregister_client
 from .ui_panel import *
@@ -85,7 +86,6 @@ def register():
         except ValueError:
             # Already registered
             print(f"{cls.__name__} already registered, skipping.")
-
     bpy.types.Scene.glaze_config = bpy.props.PointerProperty(type=GlazeConfig)
     bpy.types.Scene.current_paint_mesh = bpy.props.PointerProperty(name="Mesh", type=bpy.types.Object)
     bpy.types.Scene.current_reference_mesh = bpy.props.PointerProperty(name="Mesh", type=bpy.types.Object)
@@ -95,7 +95,13 @@ def register():
     bpy.types.Scene.new_brush_name = bpy.props.StringProperty(name="New Brush Name", default="MyBrush")
     bpy.types.Scene.target_faces = bpy.props.CollectionProperty(type=FaceIndexItem)
     bpy.types.Scene.reference_faces = bpy.props.CollectionProperty(type=FaceIndexItem)
-    bpy.types.Scene.inference_view_settings = bpy.props.PointerProperty(type=InferenceViewSettings)  
+    bpy.types.Scene.inference_view_settings = bpy.props.PointerProperty(type=InferenceViewSettings)
+    bpy.types.Scene.update_texture_4k = bpy.props.BoolProperty(
+        name="Update with 4K Texture",
+        description="Toggle between 4K texture or lower resolution",
+        default=True,
+    )  
+
     register_client()
     
 def unregister():
@@ -107,8 +113,13 @@ def unregister():
     del bpy.types.Scene.glaze_brushes
     del bpy.types.Scene.glaze_config
     del bpy.types.Scene.new_brush_name
-    del bpy.types.Scene.new_brush_type
     del bpy.types.Scene.current_view
+    del bpy.types.Scene.current_paint_mesh
+    del bpy.types.Scene.current_reference_mesh
+    del bpy.types.Scene.target_faces
+    del bpy.types.Scene.reference_faces
+    del bpy.types.Scene.inference_view_settings
+    del bpy.types.Scene.update_texture_4k
     for cls in reversed(classes):
         bpy.utils.unregister_class(cls)
     
