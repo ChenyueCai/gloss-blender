@@ -42,6 +42,10 @@ classes = [cls for name, cls in globals().items() if isinstance(cls, type)
                 issubclass(cls, bpy.types.Operator) or 
                 issubclass(cls, bpy.types.Panel))]
 
+classes.remove(bpy.types.Operator)
+classes.remove(bpy.types.PropertyGroup)
+classes.remove(bpy.types.Panel)
+
 handlers = []
 
 def draw_text(region, x=50, y=125):

@@ -572,6 +572,7 @@ class GLAZE_OT_FillTexture(bpy.types.Operator):
             wm.event_timer_remove(self._timer)
         self._timer = None
 
+
 class GLAZE_OT_FillALLTexture(bpy.types.Operator):
     # TODO: BUGGY
     bl_idname = "glaze.fill_all"
@@ -741,18 +742,127 @@ class GLAZE_OT_ClearAllPaintTexture(bpy.types.Operator):
         payload = {"type": "clear_all_texture",
                    "data": mesh_info}
         ws_client.send(payload)
+        return {"FINISHED"}
         
 class GLAZE_OT_ClearPaintTexture(bpy.types.Operator):
     bl_idname = "glaze.clear_texture"
     bl_label = "Clear Selected Face Texture"
     bl_options = {'REGISTER', 'UNDO'} 
     
-    def execute(self, context): 
-        clear_texture(context.scene.current_paint_mesh)
-        mesh_info = {"paint_mesh_name": context.scene.current_paint_mesh.name}
-        payload = {"type": "clear_all_texture",
-                   "data": mesh_info}
-        ws_client.send(payload)
+    def execute(self, context):
+        obj = context.scene.current_paint_mesh
+        context.scene.target_faces.clear()
+        bm = bmesh.from_edit_mesh(obj.data)
+        bm.faces.ensure_lookup_table()
+        target_faces = []
+        for f in bm.faces:
+            if f.select:
+                entry = context.scene.target_faces.add()
+                entry.index = f.index
+                target_faces.append(f.index)
+                self.report({'INFO'}, f"Adding {f.index} as a target face")  
+        clear_info = {"target_faces": target_faces,
+                    "mesh_name": base_name(context.scene.current_paint_mesh.name)}
+        message = {"type": "clear_face",
+                "data": clear_info}
+        
+        if ws_client.ws is None:
+            self.report({'ERROR'}, f"Server not connected")
+            return {'FINISHED'}
+        
+        ws_client.send(message)
+
+        
+        self.start_time = time.time()
+        self.timeout = 30.0
+
+        self.textures_meta = {}
+        self.num_completed_views = 0
+        self.expected_views = None
+
+        # ------------------------------
+        # Start modal timer
+        # ------------------------------
+        wm = context.window_manager
+        self._timer = wm.event_timer_add(0.1, window=context.window)
+        wm.modal_handler_add(self)
+
+        return {'RUNNING_MODAL'}
+    # ------------------------------
+    
+    def modal(self, context, event):
+        obj = context.scene.current_paint_mesh
+        if event.type != 'TIMER':
+            return {'PASS_THROUGH'}
+
+        # Timeout guard
+        if time.time() - self.start_time > self.timeout:
+            self.report({'ERROR'}, "Texture fill timed out")
+            self._cleanup(context)
+            return {'CANCELLED'}
+
+        while True:
+            try:
+                rec_message = ws_client.ws_chunks.get_nowait()
+            except Empty:
+                break
+
+            if not isinstance(rec_message, bytes):
+                continue
+
+            msg = from_binary(rec_message)
+
+            if msg.get("chunk_total") is None:
+                continue
+
+            image_name = msg.get("name")
+            chunk_index = msg.get("chunk_index")
+            chunk_total = msg.get("chunk_total")
+            view_id = msg.get("view_id")
+            num_views = msg.get("num_views")
+            image_chunk = msg.get("image")
+
+            self.expected_views = num_views
+
+            print(f"[LOG] {image_name}: {chunk_index + 1} / {chunk_total}")
+
+            if view_id not in self.textures_meta:
+                self.textures_meta[view_id] = {}
+
+            if chunk_index not in self.textures_meta[view_id]:
+                self.textures_meta[view_id][chunk_index] = image_chunk
+
+            # View complete
+            if len(self.textures_meta[view_id]) == chunk_total:
+                ordered = [
+                    self.textures_meta[view_id][k]
+                    for k in sorted(self.textures_meta[view_id].keys())
+                ]
+                image = torch.cat(ordered)
+                image = image.reshape((4096, 4096, 4))
+                image = image.cpu()
+                update_texture(obj, image, soft_merge=False)
+
+                self.num_completed_views += 1
+
+        # All views complete
+        if (
+            self.expected_views is not None
+            and self.num_completed_views >= self.expected_views
+        ):
+            self._cleanup(context)
+            self.report({'INFO'}, "[FILL TEXTURE] Completed all views")
+            return {'FINISHED'}
+
+        return {'RUNNING_MODAL'}
+
+
+    def _cleanup(self, context):
+        wm = context.window_manager
+        if self._timer:
+            wm.event_timer_remove(self._timer)
+        self._timer = None
+
         
         
 class GLAZE_OT_Undo_Fill(bpy.types.Operator):

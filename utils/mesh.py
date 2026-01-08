@@ -200,7 +200,7 @@ def clear_texture(obj):
     buffer = gpu.types.Buffer('FLOAT', buffer_size, pixels)
     current_texture.pixels.foreach_set(buffer)
 
-def update_texture(obj, texture: torch.Tensor):
+def update_texture(obj, texture: torch.Tensor, soft_merge=True):
     # reshape texture to 4096 * 4096
     # use a soft margin composite with current mask
     print("updating texture...")
@@ -231,9 +231,8 @@ def update_texture(obj, texture: torch.Tensor):
                 d = int(m.group(1))
                 if d > k:
                     k = d
-        k+=1
+        k += 1
         name = f"{base_name}.{k:03d}"
-        print(name)
         texture_copy = bpy.data.images.new(
             name=name,
             width=w, height=h,
@@ -242,22 +241,27 @@ def update_texture(obj, texture: torch.Tensor):
         )
         texture_copy.pixels.foreach_set(current_texture_pixels)
         texture_copy.update()
-        
         keep_latest_two_history(current_texture)      
         
-        current_texture_arr = current_texture_pixels.reshape(h, w, 4)
-        current_texture_alpha = current_texture_arr[..., 3:4]
-        mask = (texture_alpha - current_texture_alpha).clip(0.0,1.0)
-        
-        mask_soft = expand_mask_soft(mask[:, :,0], max_distance=15)[:,:,np.newaxis]
-        w_inpaint = mask_soft * current_texture_alpha * texture_alpha + mask
-        
-        color = w_inpaint * new_texture_arr + current_texture_arr[..., :3] * (1 - w_inpaint)
-        
-        alpha = mask + current_texture_arr[..., 3:4] * (1 - mask)
-        pixels = np.concatenate([color, alpha], axis=2).ravel()
-        
-        buffer = gpu.types.Buffer('FLOAT', buffer_size, pixels)
+        if soft_merge:
+            current_texture_arr = current_texture_pixels.reshape(h, w, 4)
+            current_texture_alpha = current_texture_arr[..., 3:4]
+            mask = (texture_alpha - current_texture_alpha).clip(0.0,1.0)
+            
+            mask_soft = expand_mask_soft(mask[:, :,0], max_distance=15)[:,:,np.newaxis]
+            w_inpaint = mask_soft * current_texture_alpha * texture_alpha + mask
+            
+            color = w_inpaint * new_texture_arr + current_texture_arr[..., :3] * (1 - w_inpaint)
+            
+            alpha = mask + current_texture_arr[..., 3:4] * (1 - mask)
+            pixels = np.concatenate([color, alpha], axis=2).ravel()
+            
+            buffer = gpu.types.Buffer('FLOAT', buffer_size, pixels)
+        else:
+            color = new_texture_arr
+            alpha = texture_alpha
+            pixels = np.concatenate([color, alpha], axis=2).ravel()
+            buffer = gpu.types.Buffer('FLOAT', buffer_size, pixels)
         current_texture.pixels.foreach_set(buffer)
         current_texture.update()
     except Exception as e:
