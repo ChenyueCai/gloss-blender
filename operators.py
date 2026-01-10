@@ -204,59 +204,87 @@ class GLAZE_OT_create_auto_brushes(bpy.types.Operator):
         ws_client.send(self.message)
 
         self.start_time = time.time()
-        self.timeout = 30.0
+        # self.timeout = 30.0
 
-        wm = context.window_manager
-        self._timer = wm.event_timer_add(0.1, window=context.window)
-        wm.modal_handler_add(self)
+        # wm = context.window_manager
+        # self._timer = wm.event_timer_add(0.1, window=context.window)
+        # wm.modal_handler_add(self)
+        while True: 
+            rec_message = ws_client.poll_bin_messages()
+            if rec_message is None:
+                pass
+            else:
 
-        return {'RUNNING_MODAL'}
+                msg = from_binary(rec_message)
 
-    def modal(self, context, event):
-        if event.type != 'TIMER':
-            return {'PASS_THROUGH'}
+                if msg.get("brush icon") is not None:
+                    brush_icon = msg["brush icon"]
 
-        # Timeout guard
-        if time.time() - self.start_time > self.timeout:
-            self.report({'ERROR'}, "Auto brush creation timed out")
-            self._cleanup(context)
-            return {'CANCELLED'}
+                    brush_dir = os.path.join(
+                        context.scene.glaze_config.brushes_folder,
+                        self.brush.name,
+                    )
+                    os.makedirs(brush_dir, exist_ok=True)
 
-        rec_message = ws_client.poll_bin_messages()
-        if rec_message is None:
-            return {'RUNNING_MODAL'}
+                    torchvision.utils.save_image(
+                        brush_icon.permute(2, 0, 1),
+                        os.path.join(brush_dir, "icon.png"),
+                    )
 
-        msg = from_binary(rec_message)
+                    self.report(
+                        {'INFO'},
+                        f"[CREATE BRUSH] done creating brush: {self.brush_name}",
+                    )
 
-        if msg.get("brush icon") is not None:
-            brush_icon = msg["brush icon"]
+                    #self._cleanup(context)
+                    return {'FINISHED'}
 
-            brush_dir = os.path.join(
-                context.scene.glaze_config.brushes_folder,
-                self.brush.name,
-            )
-            os.makedirs(brush_dir, exist_ok=True)
 
-            torchvision.utils.save_image(
-                brush_icon.permute(2, 0, 1),
-                os.path.join(brush_dir, "icon.png"),
-            )
+    # def modal(self, context, event):
+    #     if event.type != 'TIMER':
+    #         return {'PASS_THROUGH'}
 
-            self.report(
-                {'INFO'},
-                f"[CREATE BRUSH] done creating brush: {self.brush_name}",
-            )
+    #     # Timeout guard
+    #     if time.time() - self.start_time > self.timeout:
+    #         self.report({'ERROR'}, "Auto brush creation timed out")
+    #         self._cleanup(context)
+    #         return {'CANCELLED'}
 
-            self._cleanup(context)
-            return {'FINISHED'}
+    #     rec_message = ws_client.poll_bin_messages()
+    #     if rec_message is None:
+    #         return {'RUNNING_MODAL'}
 
-        return {'RUNNING_MODAL'}
+    #     msg = from_binary(rec_message)
 
-    def _cleanup(self, context):
-        wm = context.window_manager
-        if self._timer:
-            wm.event_timer_remove(self._timer)
-        self._timer = None
+    #     if msg.get("brush icon") is not None:
+    #         brush_icon = msg["brush icon"]
+
+    #         brush_dir = os.path.join(
+    #             context.scene.glaze_config.brushes_folder,
+    #             self.brush.name,
+    #         )
+    #         os.makedirs(brush_dir, exist_ok=True)
+
+    #         torchvision.utils.save_image(
+    #             brush_icon.permute(2, 0, 1),
+    #             os.path.join(brush_dir, "icon.png"),
+    #         )
+
+    #         self.report(
+    #             {'INFO'},
+    #             f"[CREATE BRUSH] done creating brush: {self.brush_name}",
+    #         )
+
+    #         self._cleanup(context)
+    #         return {'FINISHED'}
+
+    #     return {'RUNNING_MODAL'}
+
+    # def _cleanup(self, context):
+    #     wm = context.window_manager
+    #     if self._timer:
+    #         wm.event_timer_remove(self._timer)
+    #     self._timer = None
 
 
 class GLAZE_OT_create_ref_brushes(bpy.types.Operator):
@@ -328,59 +356,88 @@ class GLAZE_OT_create_ref_brushes(bpy.types.Operator):
         self.report({'INFO'}, f"[CREATE BRUSH] Creating: {self.brush_name}")
 
         self.start_time = time.time()
-        self.timeout = 30.0
-        self.received = False
+        # self.timeout = 30.0
+        # self.received = False
 
-        wm = context.window_manager
-        self._timer = wm.event_timer_add(0.1, window=context.window)
-        wm.modal_handler_add(self)
+        # wm = context.window_manager
+        # self._timer = wm.event_timer_add(0.1, window=context.window)
+        # wm.modal_handler_add(self)
+        while True: 
+            rec_message = ws_client.poll_bin_messages()
+            if rec_message is None:
+                pass
+            else:
 
-        return {'RUNNING_MODAL'}
+                msg = from_binary(rec_message)
 
-    def modal(self, context, event):
-        if event.type != 'TIMER':
-            return {'PASS_THROUGH'}
+                if msg.get("brush icon") is not None:
+                    brush_icon = msg["brush icon"]
 
-        if time.time() - self.start_time > self.timeout:
-            self.report({'ERROR'}, "Brush creation timed out")
-            self._cleanup(context)
-            return {'CANCELLED'}
+                    brush_dir = os.path.join(
+                        context.scene.glaze_config.brushes_folder,
+                        self.brush.name,
+                    )
+                    os.makedirs(brush_dir, exist_ok=True)
 
-        rec_message = ws_client.poll_bin_messages()
-        if rec_message is None:
-            return {'RUNNING_MODAL'}
+                    torchvision.utils.save_image(
+                        brush_icon.permute(2, 0, 1),
+                        os.path.join(brush_dir, "icon.png"),
+                    )
 
-        msg = from_binary(rec_message)
+                    self.report(
+                        {'INFO'},
+                        f"[CREATE BRUSH] done creating brush: {self.brush_name}",
+                    )
 
-        if msg.get("brush icon") is not None:
-            brush_icon = msg["brush icon"]
-
-            brush_dir = os.path.join(
-                context.scene.glaze_config.brushes_folder,
-                self.brush.name,
-            )
-            os.makedirs(brush_dir, exist_ok=True)
-
-            torchvision.utils.save_image(
-                brush_icon.permute(2, 0, 1),
-                os.path.join(brush_dir, "icon.png"),
-            )
-
-            self.report(
-                {'INFO'},
-                f"[CREATE BRUSH] Brush created: {self.brush_name}",
-            )
-
-            self._cleanup(context)
-            return {'FINISHED'}
+                    #self._cleanup(context)
+                    return {'FINISHED'}
 
         return {'RUNNING_MODAL'}
 
-    def _cleanup(self, context):
-        wm = context.window_manager
-        if self._timer:
-            wm.event_timer_remove(self._timer)
-        self._timer = None
+    # def modal(self, context, event):
+    #     if event.type != 'TIMER':
+    #         return {'PASS_THROUGH'}
+
+    #     if time.time() - self.start_time > self.timeout:
+    #         self.report({'ERROR'}, "Brush creation timed out")
+    #         self._cleanup(context)
+    #         return {'CANCELLED'}
+
+    #     rec_message = ws_client.poll_bin_messages()
+    #     if rec_message is None:
+    #         return {'RUNNING_MODAL'}
+
+    #     msg = from_binary(rec_message)
+
+    #     if msg.get("brush icon") is not None:
+    #         brush_icon = msg["brush icon"]
+
+    #         brush_dir = os.path.join(
+    #             context.scene.glaze_config.brushes_folder,
+    #             self.brush.name,
+    #         )
+    #         os.makedirs(brush_dir, exist_ok=True)
+
+    #         torchvision.utils.save_image(
+    #             brush_icon.permute(2, 0, 1),
+    #             os.path.join(brush_dir, "icon.png"),
+    #         )
+
+    #         self.report(
+    #             {'INFO'},
+    #             f"[CREATE BRUSH] Brush created: {self.brush_name}",
+    #         )
+
+    #         self._cleanup(context)
+    #         return {'FINISHED'}
+
+    #     return {'RUNNING_MODAL'}
+
+    # def _cleanup(self, context):
+    #     wm = context.window_manager
+    #     if self._timer:
+    #         wm.event_timer_remove(self._timer)
+    #     self._timer = None
 
 
 class GLAZE_OT_SetBrush(bpy.types.Operator):
@@ -965,3 +1022,152 @@ class MATERIAL_OT_toggle_normal(bpy.types.Operator):
             connect_normal(mat)
 
         return {'FINISHED'}
+    
+    
+
+class GLAZE_OT_HUNYUAN(bpy.types.Operator):
+    bl_idname = "glaze.hunyuan"
+    bl_label = "Run Hunyuan Texturing"
+    bl_options = {'REGISTER', 'UNDO'} 
+    
+    def execute(self, context):  
+        view_id = context.scene.current_view.sv_id
+        info = {"view_id": view_id}
+        message = {"type": "hunyuan",
+                "data": info}
+        
+        if ws_client.ws is None:
+            self.report({'ERROR'}, f"Server not connected")
+            return {'FINISHED'}
+        
+        ws_client.send(message)
+
+        
+        self.start_time = time.time()
+        while True:
+            obj = context.scene.current_paint_mesh
+            
+            # Timeout guard
+            
+
+            while True:
+                try:
+                    rec_message = ws_client.ws_chunks.get_nowait()
+                except Empty:
+                    break
+
+                if not isinstance(rec_message, bytes):
+                    continue
+
+                msg = from_binary(rec_message)
+
+                if msg.get("chunk_total") is None:
+                    continue
+
+                image_name = msg.get("name")
+                chunk_index = msg.get("chunk_index")
+                chunk_total = msg.get("chunk_total")
+                view_id = msg.get("view_id")
+                num_views = msg.get("num_views")
+                image_chunk = msg.get("image")
+
+                self.expected_views = num_views
+
+                print(f"[LOG] {image_name}: {chunk_index + 1} / {chunk_total}")
+
+                if view_id not in self.textures_meta:
+                    self.textures_meta[view_id] = {}
+
+                if chunk_index not in self.textures_meta[view_id]:
+                    self.textures_meta[view_id][chunk_index] = image_chunk
+
+                # View complete
+                if len(self.textures_meta[view_id]) == chunk_total:
+                    ordered = [
+                        self.textures_meta[view_id][k]
+                        for k in sorted(self.textures_meta[view_id].keys())
+                    ]
+                    image = torch.cat(ordered)
+                    image = image.reshape((4096, 4096, 4))
+                    image = image.cpu()
+                    update_texture(obj, image, soft_merge=False)
+
+                    self.num_completed_views += 1
+
+            # All views complete
+            if (
+                self.expected_views is not None
+                and self.num_completed_views >= self.expected_views
+            ):
+                self._cleanup(context)
+                self.report({'INFO'}, "[FILL TEXTURE] Completed all views")
+                return {'FINISHED'}
+            
+
+    # ------------------------------
+    
+    def modal(self, context, event):
+        obj = context.scene.current_paint_mesh
+        if event.type != 'TIMER':
+            return {'PASS_THROUGH'}
+
+        # Timeout guard
+        if time.time() - self.start_time > self.timeout:
+            self.report({'ERROR'}, "Texture fill timed out")
+            self._cleanup(context)
+            return {'CANCELLED'}
+
+        while True:
+            try:
+                rec_message = ws_client.ws_chunks.get_nowait()
+            except Empty:
+                break
+
+            if not isinstance(rec_message, bytes):
+                continue
+
+            msg = from_binary(rec_message)
+
+            if msg.get("chunk_total") is None:
+                continue
+
+            image_name = msg.get("name")
+            chunk_index = msg.get("chunk_index")
+            chunk_total = msg.get("chunk_total")
+            view_id = msg.get("view_id")
+            num_views = msg.get("num_views")
+            image_chunk = msg.get("image")
+
+            self.expected_views = num_views
+
+            print(f"[LOG] {image_name}: {chunk_index + 1} / {chunk_total}")
+
+            if view_id not in self.textures_meta:
+                self.textures_meta[view_id] = {}
+
+            if chunk_index not in self.textures_meta[view_id]:
+                self.textures_meta[view_id][chunk_index] = image_chunk
+
+            # View complete
+            if len(self.textures_meta[view_id]) == chunk_total:
+                ordered = [
+                    self.textures_meta[view_id][k]
+                    for k in sorted(self.textures_meta[view_id].keys())
+                ]
+                image = torch.cat(ordered)
+                image = image.reshape((4096, 4096, 4))
+                image = image.cpu()
+                update_texture(obj, image, soft_merge=False)
+
+                self.num_completed_views += 1
+
+        # All views complete
+        if (
+            self.expected_views is not None
+            and self.num_completed_views >= self.expected_views
+        ):
+            self._cleanup(context)
+            self.report({'INFO'}, "[FILL TEXTURE] Completed all views")
+            return {'FINISHED'}
+
+        return {'RUNNING_MODAL'}

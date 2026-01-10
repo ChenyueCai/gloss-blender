@@ -65,8 +65,8 @@ class GLAZE_PT_Panel(bpy.types.Panel):
         col_fill.operator("glaze.fill", text="FILL FACE")
 
         # Column 2: FILL_ALL #TODO: BUGGY!
-        col_clear = col_right.column(align=True)
-        col_clear.operator("glaze.fill_all", text="FILL ALL")
+        # col_clear = col_right.column(align=True)
+        # col_clear.operator("glaze.fill_all", text="FILL ALL")
         
         # Column 3: CLEAR TEXTURE
         col_clear = col_right.column(align=True)
@@ -83,12 +83,13 @@ class GLAZE_PT_Panel(bpy.types.Panel):
         col2.operator("glaze.set_texture", text="Set Texture")
         col3.operator("glaze.clear_all_texture", text="Clear All Texture")
         
-        mat = context.object.active_material
-        row = layout.row(align=True)
-        row.operator("material.toggle_normal_map",
-                     text=("Disconnect Normal" if mat and is_normal_connected(mat)
-                           else "Connect Normal"),
-                     icon="NORMALS_VERTEX")
+        if context.object is not None:
+            mat = context.object.active_material
+            row = layout.row(align=True)
+            row.operator("material.toggle_normal_map",
+                        text=("Disconnect Normal" if mat and is_normal_connected(mat)
+                            else "Connect Normal"),
+                        icon="NORMALS_VERTEX")
         
         # CREATE BRUSHES
         row = layout.row(align=True)
@@ -132,4 +133,9 @@ class GLAZE_PT_Panel(bpy.types.Panel):
         op.brush_name = context.scene.new_brush_name
         
         split_layout.column().operator("glaze.clear_brush_lib", text="Clear All")
+        
+        row = layout.row(align=True)
+        row = layout.row(align=True)
+        row.label(text="UI-2", icon="MESH_CUBE")
+        layout.operator("glaze.hunyuan", text="Load Hunyuan Output")
      

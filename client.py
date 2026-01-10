@@ -11,7 +11,7 @@ from .utils.mesh import update_texture
 from .utils.io import from_binary, to_binary
 import queue
 
-SERVER_URL = "ws://localhost:10014/websocket"
+SERVER_URL = "ws://localhost:10015/websocket"
 
 
 class WSClient:
