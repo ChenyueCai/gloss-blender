@@ -103,9 +103,13 @@ def register():
     bpy.types.Scene.update_texture_4k = bpy.props.BoolProperty(
         name="Update with 4K Texture",
         description="Toggle between 4K texture or lower resolution",
-        default=True,
-    )  
-
+        default=False,
+    )
+    bpy.types.Scene.full_cam_view_update  = bpy.props.BoolProperty(
+        name="Full Camera View Paint",
+        description="Use the full camera view to update the texture",
+        default=False,
+    )
     register_client()
     
 def unregister():

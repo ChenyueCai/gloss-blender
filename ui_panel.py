@@ -53,24 +53,31 @@ class GLAZE_PT_Panel(bpy.types.Panel):
         else:
             col_right.label(text="(No Image)")
             
+        # SELECTION MODE
+        split = layout.split(factor=0.2)
+        col_left = split.column(align=True)
+        col_left.label(text="Selection Mode", icon="USER")
+        col_right = split.row(align=True)
+        
+        col_right.prop(context.scene.inference_view_settings, "selection_mode", expand=True)
+        # UNLIMITED CAMERA VIEW UPDATE
+        layout.prop(context.scene, "full_cam_view_update")
+
+            
         # PAINT MODE
         split = layout.split(factor=0.2)
         col_left = split.column(align=True)
         col_left.label(text="Paint Mode", icon="USER")
         # Right button region
         col_right = split.row(align=True)
-
+        
         # Column 1: FILL
         col_fill = col_right.column(align=True)
-        col_fill.operator("glaze.fill", text="FILL FACE")
-
-        # Column 2: FILL_ALL #TODO: BUGGY!
-        # col_clear = col_right.column(align=True)
-        # col_clear.operator("glaze.fill_all", text="FILL ALL")
+        col_fill.operator("glaze.fill", text="FILL")
         
-        # Column 3: CLEAR TEXTURE
+        # Column 2: CLEAR TEXTURE
         col_clear = col_right.column(align=True)
-        col_clear.operator("glaze.clear_texture", text="CLEAR FACE")
+        col_clear.operator("glaze.clear_texture", text="CLEAR")
         
         # INFERENCE FACE MODE
         layout.prop(context.scene, "update_texture_4k")

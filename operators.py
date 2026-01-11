@@ -1031,8 +1031,11 @@ class GLAZE_OT_HUNYUAN(bpy.types.Operator):
     bl_options = {'REGISTER', 'UNDO'} 
     
     def execute(self, context):  
+        time.sleep(30)
+        obj = context.scene.current_paint_mesh
         view_id = context.scene.current_view.sv_id
-        info = {"view_id": view_id}
+        info = {"view_id": view_id,
+                "mesh_name":base_name(context.scene.current_paint_mesh.name)}
         message = {"type": "hunyuan",
                 "data": info}
         
@@ -1042,86 +1045,16 @@ class GLAZE_OT_HUNYUAN(bpy.types.Operator):
         
         ws_client.send(message)
 
-        
         self.start_time = time.time()
-        while True:
-            obj = context.scene.current_paint_mesh
-            
-            # Timeout guard
-            
-
-            while True:
-                try:
-                    rec_message = ws_client.ws_chunks.get_nowait()
-                except Empty:
-                    break
-
-                if not isinstance(rec_message, bytes):
-                    continue
-
-                msg = from_binary(rec_message)
-
-                if msg.get("chunk_total") is None:
-                    continue
-
-                image_name = msg.get("name")
-                chunk_index = msg.get("chunk_index")
-                chunk_total = msg.get("chunk_total")
-                view_id = msg.get("view_id")
-                num_views = msg.get("num_views")
-                image_chunk = msg.get("image")
-
-                self.expected_views = num_views
-
-                print(f"[LOG] {image_name}: {chunk_index + 1} / {chunk_total}")
-
-                if view_id not in self.textures_meta:
-                    self.textures_meta[view_id] = {}
-
-                if chunk_index not in self.textures_meta[view_id]:
-                    self.textures_meta[view_id][chunk_index] = image_chunk
-
-                # View complete
-                if len(self.textures_meta[view_id]) == chunk_total:
-                    ordered = [
-                        self.textures_meta[view_id][k]
-                        for k in sorted(self.textures_meta[view_id].keys())
-                    ]
-                    image = torch.cat(ordered)
-                    image = image.reshape((4096, 4096, 4))
-                    image = image.cpu()
-                    update_texture(obj, image, soft_merge=False)
-
-                    self.num_completed_views += 1
-
-            # All views complete
-            if (
-                self.expected_views is not None
-                and self.num_completed_views >= self.expected_views
-            ):
-                self._cleanup(context)
-                self.report({'INFO'}, "[FILL TEXTURE] Completed all views")
-                return {'FINISHED'}
-            
-
-    # ------------------------------
-    
-    def modal(self, context, event):
-        obj = context.scene.current_paint_mesh
-        if event.type != 'TIMER':
-            return {'PASS_THROUGH'}
-
-        # Timeout guard
-        if time.time() - self.start_time > self.timeout:
-            self.report({'ERROR'}, "Texture fill timed out")
-            self._cleanup(context)
-            return {'CANCELLED'}
-
+        self.textures_meta = {}
+        self.num_completed_views = 0
+        self.expected_views = None
+        
         while True:
             try:
                 rec_message = ws_client.ws_chunks.get_nowait()
             except Empty:
-                break
+                continue
 
             if not isinstance(rec_message, bytes):
                 continue
@@ -1155,19 +1088,19 @@ class GLAZE_OT_HUNYUAN(bpy.types.Operator):
                     for k in sorted(self.textures_meta[view_id].keys())
                 ]
                 image = torch.cat(ordered)
-                image = image.reshape((4096, 4096, 4))
+                image = image.reshape((4096, 4096, 3)) / 255.0
                 image = image.cpu()
-                update_texture(obj, image, soft_merge=False)
+                image_full = torch.ones((4096, 4096, 4))
+                image_full[:, :, :3] = image
+                update_texture(obj, image_full, soft_merge=False)
 
                 self.num_completed_views += 1
 
-        # All views complete
-        if (
-            self.expected_views is not None
-            and self.num_completed_views >= self.expected_views
-        ):
-            self._cleanup(context)
-            self.report({'INFO'}, "[FILL TEXTURE] Completed all views")
-            return {'FINISHED'}
-
-        return {'RUNNING_MODAL'}
+                # All views complete
+                if (
+                    self.expected_views is not None
+                    and self.num_completed_views >= self.expected_views
+                ):
+                    self.report({'INFO'}, "[FILL TEXTURE] Completed all views")
+                    return {'FINISHED'}
+            

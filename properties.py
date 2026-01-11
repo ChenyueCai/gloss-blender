@@ -41,7 +41,8 @@ class InferenceViewSettings(bpy.types.PropertyGroup):
     selection_mode: bpy.props.EnumProperty(
         name="Mode",
         items=[
-            ('FACE', "Face Mode", "")
+            ('FACE', "FACE", ""),
+            ('CAMERA', "CAMERA", "")
         ],
         default='FACE'
     )
