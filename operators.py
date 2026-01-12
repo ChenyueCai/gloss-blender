@@ -639,7 +639,10 @@ class GLAZE_OT_SetPaintTexture(bpy.types.Operator):
         if ws_client.ws is None:
             self.report({'ERROR'}, f"Server not connected")
             return {'FINISHED'}
-        h = w = 4096
+        if context.scene.update_texture_4k:
+            h = w = 4096
+        else:
+            h = w = 1024
         buffer_size = h * w * 4 
         paint_obj = context.scene.current_paint_mesh
         current_paint_texture = get_current_texture(paint_obj)
@@ -761,7 +764,10 @@ class GLAZE_OT_ClearPaintTexture(bpy.types.Operator):
                     for k in sorted(self.textures_meta[view_id].keys())
                 ]
                 image = torch.cat(ordered)
-                image = image.reshape((4096, 4096, 4))
+                if context.scene.update_texture_4k:
+                    image = image.reshape((4096, 4096, 4))
+                else:
+                    image = image.reshape((1024, 1024, 4))
                 image = image.cpu()
                 update_texture(obj, image, soft_merge=False)
 
@@ -953,10 +959,16 @@ class GLAZE_OT_HUNYUAN(bpy.types.Operator):
                     for k in sorted(self.textures_meta[view_id].keys())
                 ]
                 image = torch.cat(ordered)
-                image = image.reshape((4096, 4096, 3)) / 255.0
-                image = image.cpu()
-                image_full = torch.ones((4096, 4096, 4))
-                image_full[:, :, :3] = image
+                if context.scene.update_texture_4k:
+                    image = image.reshape((4096, 4096, 3)) / 255.0
+                    image = image.cpu()
+                    image_full = torch.ones((4096, 4096, 4))
+                    image_full[:, :, :3] = image
+                else:
+                    image = image.reshape((1024, 1024, 3)) / 255.0
+                    image = image.cpu()
+                    image_full = torch.ones((1024, 1024, 4))
+                    image_full[:, :, :3] = image
                 update_texture(obj, image_full, soft_merge=False)
 
                 self.num_completed_views += 1
@@ -968,4 +980,3 @@ class GLAZE_OT_HUNYUAN(bpy.types.Operator):
                 ):
                     self.report({'INFO'}, "[FILL TEXTURE] Completed all views")
                     return {'FINISHED'}
-            

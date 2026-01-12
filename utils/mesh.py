@@ -132,7 +132,10 @@ def apply_texture(obj, image_path, suffix=''):
     # if image_path exist but there is no prev bpy image, create one
     # if image_path exist and prev bpy image exist, replace the previous image
     
-    width, height = 4096, 4096
+    if not bpy.context.scene.update_texture_4k:
+        width, height = 1024, 1024 #4096
+    else:
+        width, height= 4096, 4096
     if image_path is None or not Path(image_path).exists():
         image_name = obj.name + f".{suffix}.png"
     else:
@@ -194,7 +197,10 @@ def get_current_texture(obj):
 
 def clear_texture(obj):
     current_texture = get_current_texture(obj)
-    h = w = 4096
+    if not bpy.context.scene.update_texture_4k:
+        h = w = 1024 #4096
+    else:
+        h = w = 4096
     buffer_size = h * w * 4 
     pixels = np.zeros(buffer_size, dtype=np.float32) 
     buffer = gpu.types.Buffer('FLOAT', buffer_size, pixels)
@@ -204,8 +210,11 @@ def update_texture(obj, texture: torch.Tensor, soft_merge=True):
     # reshape texture to 4096 * 4096
     # use a soft margin composite with current mask
     print("updating texture...")
-    h = w = 4096
-    texture = torchvision.transforms.Resize((4096, 4096))(texture.permute(2,0,1).unsqueeze(0)).squeeze(0).permute(1,2,0)
+    if not bpy.context.scene.update_texture_4k:
+        h = w = 1024 #4096
+    else:
+        h = w = 4096
+    texture = torchvision.transforms.Resize((h, w))(texture.permute(2,0,1).unsqueeze(0)).squeeze(0).permute(1,2,0)
     texture = np.array(texture)
     # get current texture and mask; create new texture pixels
     current_texture = get_current_texture(obj)
