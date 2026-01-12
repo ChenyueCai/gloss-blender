@@ -504,30 +504,25 @@ class GLAZE_OT_FillTexture(bpy.types.Operator):
 
     def execute(self, context):
         obj = context.scene.current_paint_mesh
-        # support two modes of filling: face mode and view mode
-        # face mode
-        if context.scene.inference_view_settings.selection_mode == 'FACE':
-            context.scene.target_faces.clear()
-            bm = bmesh.from_edit_mesh(obj.data)
-            bm.faces.ensure_lookup_table()
-            target_faces = []
-            for f in bm.faces:
-                if f.select:
-                    entry = context.scene.target_faces.add()
-                    entry.index = f.index
-                    target_faces.append(f.index)
-                    self.report({'INFO'}, f"Adding {f.index} as a target face")
+        context.scene.target_faces.clear()
+        bm = bmesh.from_edit_mesh(obj.data)
+        bm.faces.ensure_lookup_table()
+        target_faces = []
+        for f in bm.faces:
+            if f.select:
+                entry = context.scene.target_faces.add()
+                entry.index = f.index
+                target_faces.append(f.index)
+                self.report({'INFO'}, f"Adding {f.index} as a target face")
+        
+        fill_info = {"target_faces": target_faces,
+                    "mesh_name": base_name(context.scene.current_paint_mesh.name),
+                    "brush_name": context.scene.current_brush, "high_res": context.scene.update_texture_4k,
+                    "mode": context.scene.inference_view_settings.selection_mode,
+                    "update": context.scene.full_cam_view_update}
+        message = {"type": "fill",
+                "data": fill_info}
             
-            fill_info = {"target_faces": target_faces,
-                         "mesh_name": base_name(context.scene.current_paint_mesh.name),
-                        "brush_name": context.scene.current_brush, "high_res": context.scene.update_texture_4k}
-            message = {"type": "fill_face",
-                    "data": fill_info}
-        if context.scene.inference_view_settings.selection_mode == 'ALL':
-            fill_info = {"mesh_name": base_name(context.scene.current_paint_mesh.name),
-                        "brush_name": context.scene.current_brush, "high_res": context.scene.update_texture_4k, "all": True}
-            message = {"type": "fill_face",
-                    "data": fill_info}
         if ws_client.ws is None:
             self.report({'ERROR'}, f"Server not connected")
             return {'FINISHED'}
@@ -628,136 +623,6 @@ class GLAZE_OT_FillTexture(bpy.types.Operator):
         if self._timer:
             wm.event_timer_remove(self._timer)
         self._timer = None
-
-
-class GLAZE_OT_FillALLTexture(bpy.types.Operator):
-    # TODO: BUGGY
-    bl_idname = "glaze.fill_all"
-    bl_label = "Fill All Texture"
-    bl_options = {'REGISTER', 'UNDO'} 
-
-    _timer = None
-
-    # -----------------------------------
-    # EXECUTE: send request + init state
-    # -----------------------------------
-    def execute(self, context):
-        self.obj = context.scene.current_paint_mesh
-
-        if ws_client.ws is None:
-            self.report({'ERROR'}, "Server not connected")
-            return {'CANCELLED'}
-
-        fill_info = {
-            "mesh_name": base_name(self.obj.name),
-            "brush_name": context.scene.current_brush,
-            "high_res": context.scene.update_texture_4k,
-        }
-
-        self.message = {"type": "fill_all", "data": fill_info}
-        ws_client.send(self.message)
-
-        # -----------------------------------
-        # Modal state
-        # -----------------------------------
-        self.textures_meta = {}
-        self.num_completed_views = 0
-        self.expected_views = None
-
-        self.start_time = time.time()
-        
-
-        wm = context.window_manager
-        self._timer = wm.event_timer_add(0.1, window=context.window)
-        wm.modal_handler_add(self)
-
-        self.report({'INFO'}, "[FILL TEXTURE] Filling all views…")
-
-        return {'RUNNING_MODAL'}
-
-    # -----------------------------------
-    # MODAL: poll websocket chunks
-    # -----------------------------------
-    def modal(self, context, event):
-        if event.type != 'TIMER':
-            return {'PASS_THROUGH'}
-
-        # Timeout guard
-        # if time.time() - self.start_time > self.timeout:
-        #     self.report({'ERROR'}, "Fill all texture timed out")
-        #     self._cleanup(context)
-        #     return {'CANCELLED'}
-
-        # Drain websocket queue non-blocking
-        while True:
-            try:
-                rec_message = ws_client.ws_chunks.get_nowait()
-            except Empty:
-                break
-
-            if not isinstance(rec_message, bytes):
-                continue
-
-            msg = from_binary(rec_message)
-
-            if msg.get("chunk_total") is None:
-                continue
-
-            image_name = msg.get("name")
-            chunk_index = msg.get("chunk_index")
-            chunk_total = msg.get("chunk_total")
-            view_id = msg.get("view_id")
-            num_views = msg.get("num_views")
-            image_chunk = msg.get("image")
-
-            self.expected_views = num_views
-
-            print(f"[LOG] {image_name}: {chunk_index + 1} / {chunk_total}")
-
-            if view_id not in self.textures_meta:
-                self.textures_meta[view_id] = {}
-
-            if chunk_index not in self.textures_meta[view_id]:
-                self.textures_meta[view_id][chunk_index] = image_chunk
-
-            # View complete
-            if len(self.textures_meta[view_id]) == chunk_total:
-                ordered = [
-                    self.textures_meta[view_id][k]
-                    for k in sorted(self.textures_meta[view_id].keys())
-                ]
-
-                image = torch.cat(ordered).reshape((4096, 4096, 4))
-                image = image.cpu()
-
-                self.report(
-                    {'INFO'},
-                    f"[FILL TEXTURE] Filling texture {view_id + 1}/{num_views}",
-                )
-
-                update_texture(self.obj, image)
-                self.num_completed_views += 1
-
-        # All views complete
-        if (
-            self.expected_views is not None
-            and self.num_completed_views >= self.expected_views
-        ):
-            self._cleanup(context)
-            self.report({'INFO'}, "[FILL TEXTURE] Completed all views")
-            return {'FINISHED'}
-
-        return {'RUNNING_MODAL'}
-
-    # -----------------------------------
-    # CLEANUP
-    # -----------------------------------
-    def _cleanup(self, context):
-        wm = context.window_manager
-        if self._timer:
-            wm.event_timer_remove(self._timer)
-        self._timer = None
-    
 
 
 

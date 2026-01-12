@@ -144,5 +144,5 @@ class GLAZE_PT_Panel(bpy.types.Panel):
         row = layout.row(align=True)
         row = layout.row(align=True)
         row.label(text="UI-2", icon="MESH_CUBE")
-        layout.operator("glaze.hunyuan", text="Load Hunyuan Output")
+        layout.operator("glaze.hunyuan", text="Load Model Two Output")
      

@@ -241,7 +241,7 @@ def update_texture(obj, texture: torch.Tensor, soft_merge=True):
         )
         texture_copy.pixels.foreach_set(current_texture_pixels)
         texture_copy.update()
-        keep_latest_two_history(current_texture)      
+        keep_latest_six_history(current_texture)      
         
         if soft_merge:
             current_texture_arr = current_texture_pixels.reshape(h, w, 4)
@@ -356,7 +356,7 @@ def replace_image(old_img, new_img):
     new_img.name = old_name
         
 
-def keep_latest_two_history(current_tex):
+def keep_latest_six_history(current_tex):
     """
     Keep only the two most recent history textures for the given image.
     History textures follow the format:
@@ -376,14 +376,14 @@ def keep_latest_two_history(current_tex):
             histories.append((img, int(m.group(1))))
 
     # If fewer than 2 exist, nothing to delete
-    if len(histories) <= 2:
+    if len(histories) <= 6:
         return
 
     # Sort by number (descending) — newest first
     histories.sort(key=lambda x: x[1], reverse=True)
 
     # Keep only the first 2, delete the rest
-    to_delete = histories[2:]
+    to_delete = histories[6:]
 
     for img, n in to_delete:
         img.user_clear()
