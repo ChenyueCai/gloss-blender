@@ -82,13 +82,16 @@ class GLAZE_PT_Panel(bpy.types.Panel):
         col1.operator("glaze.undo_texture", text="Undo")
         col2.operator("glaze.set_texture", text="Set Texture")
         col3.operator("glaze.clear_all_texture", text="Clear All Texture")
-        
-        mat = context.object.active_material
-        row = layout.row(align=True)
-        row.operator("material.toggle_normal_map",
-                     text=("Disconnect Normal" if mat and is_normal_connected(mat)
-                           else "Connect Normal"),
-                     icon="NORMALS_VERTEX")
+
+        try:
+            mat = context.object.active_material
+            row = layout.row(align=True)
+            row.operator("material.toggle_normal_map",
+                        text=("Disconnect Normal" if mat and is_normal_connected(mat)
+                            else "Connect Normal"),
+                        icon="NORMALS_VERTEX")
+        except Exception as e:
+            print(f'could not set up material toggle {e}')
         
         # CREATE BRUSHES
         row = layout.row(align=True)
