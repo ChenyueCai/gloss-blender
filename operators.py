@@ -126,7 +126,7 @@ class GLAZE_OT_SetReference(bpy.types.Operator):
         curr_view.mesh = base_name(context.scene.current_reference_mesh.name)
         single_view_texture_path = os.path.join(context.scene.glaze_config.single_views_texture_folder, curr_view.mesh[:-4], "view%04d.png" % curr_view.sv_id)
         apply_texture(bpy.data.objects.get(curr_view.mesh), single_view_texture_path, suffix='ref')
-        self.report({'INFO'}, f"Selected Single View index: {curr_view.sv_id} - Mesh {curr_view.mesh}")
+        self.report({'INFO'}, f"Selected Single View index: {curr_view.sv_id} - Mesh {curr_view.mesh} - applying to {bpy.data.objects.get(curr_view.mesh)} ({curr_view.mesh}) - texture {single_view_texture_path}")
         return {'FINISHED'}
 
 
@@ -449,6 +449,11 @@ class GLAZE_OT_FillTexture(bpy.types.Operator):
         obj = context.scene.current_paint_mesh
         # support two modes of filling: face mode and view mode
         # face mode
+        fill_info = {"mesh_name": base_name(context.scene.current_paint_mesh.name),
+                     "brush_name": context.scene.current_brush,
+                     "high_res": context.scene.update_texture_4k,
+                     "debug": context.scene.server_debug,
+                     "max_cameras": context.scene.max_cameras}
         if context.scene.inference_view_settings.selection_mode == 'FACE':
             context.scene.target_faces.clear()
             bm = bmesh.from_edit_mesh(obj.data)
@@ -459,17 +464,15 @@ class GLAZE_OT_FillTexture(bpy.types.Operator):
                     entry = context.scene.target_faces.add()
                     entry.index = f.index
                     target_faces.append(f.index)
-                    self.report({'INFO'}, f"Adding {f.index} as a target face")
+            self.report({'INFO'}, f"Adding {len(target_faces)} as a target faces")
             
-            fill_info = {"target_faces": target_faces,
-                         "mesh_name": base_name(context.scene.current_paint_mesh.name),
-                        "brush_name": context.scene.current_brush, "high_res": context.scene.update_texture_4k}
-            message = {"type": "fill_face",
-                    "data": fill_info}
-        if context.scene.inference_view_settings.selection_mode == 'ALL':
-            fill_info = {"mesh_name": base_name(context.scene.current_paint_mesh.name),
-                        "brush_name": context.scene.current_brush, "high_res": context.scene.update_texture_4k, "all": True}
-            message = {"type": "fill_face",
+            fill_info["target_faces"] = target_faces
+            fill_info["clip_fill_to_faces"] = context.scene.clip_fill_to_faces
+
+        elif context.scene.inference_view_settings.selection_mode == 'ALL':
+            fill_info["all"] = True
+
+        message = {"type": "fill_face",
                     "data": fill_info}
         if ws_client.ws is None:
             self.report({'ERROR'}, f"Server not connected")
@@ -479,7 +482,7 @@ class GLAZE_OT_FillTexture(bpy.types.Operator):
 
         
         self.start_time = time.time()
-        self.timeout = 30.0
+        self.timeout = 180.0
 
         self.textures_meta = {}
         self.num_completed_views = 0
@@ -595,6 +598,7 @@ class GLAZE_OT_FillALLTexture(bpy.types.Operator):
             "mesh_name": base_name(self.obj.name),
             "brush_name": context.scene.current_brush,
             "high_res": context.scene.update_texture_4k,
+            "debug": context.scene.server_debug
         }
 
         self.message = {"type": "fill_all", "data": fill_info}
@@ -760,7 +764,8 @@ class GLAZE_OT_ClearPaintTexture(bpy.types.Operator):
                 entry = context.scene.target_faces.add()
                 entry.index = f.index
                 target_faces.append(f.index)
-                self.report({'INFO'}, f"Adding {f.index} as a target face")  
+                #self.report({'INFO'}, f"Adding {f.index} as a target face")
+        self.report({'INFO'}, f"Adding {len(target_faces)} as a target faces")
         clear_info = {"target_faces": target_faces,
                     "mesh_name": base_name(context.scene.current_paint_mesh.name)}
         message = {"type": "clear_face",

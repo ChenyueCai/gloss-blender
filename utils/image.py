@@ -70,5 +70,7 @@ def get_single_view_files(self, context):
     if not items:
         items.append(('NONE', 'No files found', ''))
 
+    print(f'Found {len(items)} single_views, such as {items[0]}')
+
     return items
 

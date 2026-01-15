@@ -73,7 +73,11 @@ class GLAZE_PT_Panel(bpy.types.Panel):
         col_clear.operator("glaze.clear_texture", text="CLEAR FACE")
         
         # INFERENCE FACE MODE
-        layout.prop(context.scene, "update_texture_4k")
+        row = layout.row()
+        row.prop(context.scene, "update_texture_4k")
+        row.prop(context.scene, "server_debug")
+        row.prop(context.scene, "clip_fill_to_faces")
+        row.prop(context.scene, "max_cameras")
         
         row = layout.row()
         col1 = row.column()

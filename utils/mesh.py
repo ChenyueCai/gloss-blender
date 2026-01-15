@@ -165,6 +165,11 @@ def apply_texture(obj, image_path, suffix=''):
         for node in nodes:
             if node.type == 'BSDF_PRINCIPLED':
                 bsdf = node
+                try:
+                    bsdf.inputs["Specular IOR Level"].default_value = 0.0
+                    #bsdf.inputs[13].default_value = 0.0
+                except Exception as e:
+                    print('Could not set IOR level')
                 break
         if bsdf is None:
             continue
