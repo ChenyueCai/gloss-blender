@@ -204,6 +204,7 @@ def clear_texture(obj):
     buffer_size = h * w * 4 
     pixels = np.zeros(buffer_size, dtype=np.float32) 
     buffer = gpu.types.Buffer('FLOAT', buffer_size, pixels)
+    current_texture.scale(h, w)
     current_texture.pixels.foreach_set(buffer)
 
 def update_texture(obj, texture: torch.Tensor, soft_merge=True):
@@ -218,6 +219,7 @@ def update_texture(obj, texture: torch.Tensor, soft_merge=True):
     texture = np.array(texture)
     # get current texture and mask; create new texture pixels
     current_texture = get_current_texture(obj)
+    current_texture.scale(h, w)
     buffer_size = h * w * 4 
     # alpha channel of the rec texture 
     texture_alpha = np.flipud(texture[..., 3:4]) # set to the target face only 
