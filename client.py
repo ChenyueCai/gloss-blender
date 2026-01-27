@@ -60,7 +60,7 @@ class WSClient:
                 await asyncio.sleep(0.5)
                 continue
 
-            print("send_worker: waiting for data from queue...")
+            #print("send_worker: waiting for data from queue...")
             data = await self.send_queue.get()
             print(f"send_worker: got data, sending...")
 
@@ -95,7 +95,7 @@ class WSClient:
                     continue
 
             try:
-                print("receive_worker: waiting for message...")
+                #print("receive_worker: waiting for message...")
                 msg = await self.ws.recv()
                 print(f"Received message")
                 self.receive_queue.append(msg)

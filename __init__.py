@@ -104,7 +104,38 @@ def register():
         name="Update with 4K Texture",
         description="Toggle between 4K texture or lower resolution",
         default=True,
-    )  
+    )
+    bpy.types.Scene.server_debug = bpy.props.BoolProperty(
+        name="Server Debug",
+        description="If true, server will write debug data to disk",
+        default=True)
+    bpy.types.Scene.clip_fill_to_faces = bpy.props.BoolProperty(
+        name="Clip to Faces",
+        description="If true, will clip texture fill to faces, if provided",
+        default=True)
+    bpy.types.Scene.soft_add = bpy.props.BoolProperty(
+        name="Soft Add",
+        description="If true, updates are soft-added",
+        default=True)
+    bpy.types.Scene.dilate = bpy.props.BoolProperty(
+        name="Dilate",
+        description="If true, will dilate on the server side",
+        default=True)
+    bpy.types.Scene.cam_dist = bpy.props.FloatProperty(
+        name="Dist",
+        description="How far should local cameras be placed for filling",
+        default=0.75,
+        min=0.1,
+        max=1.0,
+        subtype='FACTOR'  # Subtype can change how it's displayed, e.g., as a percentage or distance
+    )
+    bpy.types.Scene.max_cameras = bpy.props.IntProperty(
+        name="Max Cam",
+        description="Max fill patches to use",
+        default=5,
+        min=1,  # Hard minimum value
+        max=15  # Hard maximum value
+    )
 
     register_client()
     
@@ -124,6 +155,12 @@ def unregister():
     del bpy.types.Scene.reference_faces
     del bpy.types.Scene.inference_view_settings
     del bpy.types.Scene.update_texture_4k
+    del bpy.types.Scene.server_debug
+    del bpy.types.Scene.clip_fill_to_faces
+    del bpy.types.Scene.dilate
+    del bpy.types.Scene.soft_add
+    del bpy.types.Scene.cam_dist
+    del bpy.types.Scene.max_cameras
     for cls in reversed(classes):
         bpy.utils.unregister_class(cls)
     

@@ -453,7 +453,9 @@ class GLAZE_OT_FillTexture(bpy.types.Operator):
                      "brush_name": context.scene.current_brush,
                      "high_res": context.scene.update_texture_4k,
                      "debug": context.scene.server_debug,
-                     "max_cameras": context.scene.max_cameras}
+                     "max_cameras": context.scene.max_cameras,
+                     "cam_dist": context.scene.cam_dist,
+                     "dilate": context.scene.dilate}
         if context.scene.inference_view_settings.selection_mode == 'FACE':
             context.scene.target_faces.clear()
             bm = bmesh.from_edit_mesh(obj.data)
@@ -553,7 +555,7 @@ class GLAZE_OT_FillTexture(bpy.types.Operator):
                     image = image.reshape((1024, 1024, 4))
 
                 image = image.cpu()
-                update_texture(obj, image)
+                update_texture(obj, image, soft_merge=context.scene.soft_add)
 
                 self.num_completed_views += 1
 
