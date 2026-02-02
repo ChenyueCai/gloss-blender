@@ -420,9 +420,3 @@ def send_large_image(name: str, task_name: str, image: np.ndarray, chunk_size: i
         })
     return msgs  # your binary-packer function
 
-
-# inference_response = {'new_texture': my_tensor}
-# bin_str = to_binary(inference_response)
-# # In blender:
-# res = from_binary(bin_message)
-# res['new_texture']

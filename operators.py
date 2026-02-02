@@ -3,7 +3,7 @@ import bmesh
 
 from .utils.config import load_glaze_config_from_yaml
 from .utils.mesh import load_mesh, apply_texture, update_texture, get_current_texture, undo_texture, \
-    is_normal_connected, disconnect_normal, connect_normal, clear_texture
+    is_normal_connected, disconnect_normal, connect_normal, clear_texture, set_view_center, base_name
 from .utils.io import to_binary, from_binary, send_large_image
 from .client import ws_client
 
@@ -15,23 +15,6 @@ import time
 
 from queue import Empty
 
-
-REF_MESH_NAME = "GlazeMesh_Ref"
-PAINT_MESH_NAME = "GlazeMesh_Paint"
-
-
-def set_view_center(obj, area):
-    """Center a 3D View area on an object."""
-    for space in area.spaces:
-        if space.type == 'VIEW_3D':
-            space.region_3d.view_location = obj.location
-            space.region_3d.view_rotation = obj.matrix_world.to_quaternion()
-            break
-        
-def base_name(name):
-    # Matches "thing", "thing.001", "thing.123", even "thing.something.001"
-    m = re.match(r"^(.*?)(?:\.\d+)?$", name)
-    return m.group(1)
 
 class GLAZE_OT_LoadReferenceMesh(bpy.types.Operator):
     """Load Reference Mesh"""
@@ -146,30 +129,57 @@ class GLAZE_OT_LoadReferenceView(bpy.types.Operator):
         return {'FINISHED'}
 
 
+################################## Brush Operators Utils ####################################
+
 def brush_exists(scene, name):
     for b in scene.glaze_brushes:
         if b.name == name:
             return True
     return False
 
-    
+
+def start_brush_listener(context, brush_name, brush_type, brush_sv_id):
+    def _poll():
+        rec_message = ws_client.poll_bin_messages()
+        if rec_message is None:
+            return 0.1  # keep polling
+        msg = from_binary(rec_message)
+        if msg.get("brush icon") is not None:
+            # save brush icon
+            brush_icon = msg["brush icon"]
+            brush_dir = os.path.join(
+                context.scene.glaze_config.brushes_folder,
+                brush_name,
+            )
+            os.makedirs(brush_dir, exist_ok=True)
+            torchvision.utils.save_image(
+                brush_icon.permute(2, 0, 1),
+                os.path.join(brush_dir, "icon.png"),
+            )
+            # add brush to the scene
+            brush = context.scene.glaze_brushes.add()
+            brush.name = brush_name
+            brush.sv_id = brush_sv_id
+            brush.brush_type = brush_type
+            print(f"[CREATE BRUSH] done creating brush: {brush_name}")
+            return None  # stop timer
+        return 0.1  # keep polling
+    bpy.app.timers.register(_poll)
+
+   
 class GLAZE_OT_create_auto_brushes(bpy.types.Operator):
     """Create New Auto Type Brush"""
     bl_idname = "glaze.create_auto_brush"
     bl_label = "Add Brush"
-    
     brush_name: bpy.props.StringProperty(name="Name")
-
-    _timer = None
+    
     def execute(self, context):
         self.brush_type = "AutoSampledReferenceBrush"
-
         if not self.brush_name:
             self.report({'ERROR'}, "Brush name cannot be empty")
             return {'CANCELLED'}
-
+        
         scene = context.scene
-
         if brush_exists(scene, self.brush_name):
             self.report(
                 {'INFO'},
@@ -181,17 +191,11 @@ class GLAZE_OT_create_auto_brushes(bpy.types.Operator):
             self.report({'ERROR'}, "Server not connected")
             return {'CANCELLED'}
 
-        self.brush = scene.glaze_brushes.add()
-        self.brush.name = self.brush_name
-        self.brush.mesh = context.scene.current_view.mesh
-        self.brush.brush_type = self.brush_type
-        self.brush.sv_id = context.scene.current_view.sv_id
-
         brush_info = {
             "brush_name": self.brush_name,
             "brush_type": self.brush_type,
-            "brush_mesh": self.brush.mesh[:-4],
-            "sv_id": self.brush.sv_id,
+            "brush_mesh": context.scene.current_view.mesh[:-4],
+            "sv_id": context.scene.current_view.sv_id,
         }
 
         self.message = {"type": "add_brush", "data": brush_info}
@@ -202,89 +206,8 @@ class GLAZE_OT_create_auto_brushes(bpy.types.Operator):
         )
 
         ws_client.send(self.message)
-
-        self.start_time = time.time()
-        # self.timeout = 30.0
-
-        # wm = context.window_manager
-        # self._timer = wm.event_timer_add(0.1, window=context.window)
-        # wm.modal_handler_add(self)
-        while True: 
-            rec_message = ws_client.poll_bin_messages()
-            if rec_message is None:
-                pass
-            else:
-
-                msg = from_binary(rec_message)
-
-                if msg.get("brush icon") is not None:
-                    brush_icon = msg["brush icon"]
-
-                    brush_dir = os.path.join(
-                        context.scene.glaze_config.brushes_folder,
-                        self.brush.name,
-                    )
-                    os.makedirs(brush_dir, exist_ok=True)
-
-                    torchvision.utils.save_image(
-                        brush_icon.permute(2, 0, 1),
-                        os.path.join(brush_dir, "icon.png"),
-                    )
-
-                    self.report(
-                        {'INFO'},
-                        f"[CREATE BRUSH] done creating brush: {self.brush_name}",
-                    )
-
-                    #self._cleanup(context)
-                    return {'FINISHED'}
-
-
-    # def modal(self, context, event):
-    #     if event.type != 'TIMER':
-    #         return {'PASS_THROUGH'}
-
-    #     # Timeout guard
-    #     if time.time() - self.start_time > self.timeout:
-    #         self.report({'ERROR'}, "Auto brush creation timed out")
-    #         self._cleanup(context)
-    #         return {'CANCELLED'}
-
-    #     rec_message = ws_client.poll_bin_messages()
-    #     if rec_message is None:
-    #         return {'RUNNING_MODAL'}
-
-    #     msg = from_binary(rec_message)
-
-    #     if msg.get("brush icon") is not None:
-    #         brush_icon = msg["brush icon"]
-
-    #         brush_dir = os.path.join(
-    #             context.scene.glaze_config.brushes_folder,
-    #             self.brush.name,
-    #         )
-    #         os.makedirs(brush_dir, exist_ok=True)
-
-    #         torchvision.utils.save_image(
-    #             brush_icon.permute(2, 0, 1),
-    #             os.path.join(brush_dir, "icon.png"),
-    #         )
-
-    #         self.report(
-    #             {'INFO'},
-    #             f"[CREATE BRUSH] done creating brush: {self.brush_name}",
-    #         )
-
-    #         self._cleanup(context)
-    #         return {'FINISHED'}
-
-    #     return {'RUNNING_MODAL'}
-
-    # def _cleanup(self, context):
-    #     wm = context.window_manager
-    #     if self._timer:
-    #         wm.event_timer_remove(self._timer)
-    #     self._timer = None
+        start_brush_listener(context, self.brush_name, self.brush_type, context.scene.current_view.sv_id)
+        return {'FINISHED'}
 
 
 class GLAZE_OT_create_ref_brushes(bpy.types.Operator):
@@ -335,109 +258,19 @@ class GLAZE_OT_create_ref_brushes(bpy.types.Operator):
             self.report({'ERROR'}, "Server not connected")
             return {'CANCELLED'}
 
-        self.brush = scene.glaze_brushes.add()
-        self.brush.name = self.brush_name
-        self.brush.mesh = context.scene.current_view.mesh
-        self.brush.brush_type = self.brush_type
-        self.brush.sv_id = context.scene.current_view.sv_id
-
         brush_info = {
             "brush_name": self.brush_name,
             "brush_type": self.brush_type,
-            "brush_mesh": self.brush.mesh[:-4],
-            "sv_id": self.brush.sv_id,
+            "brush_mesh": context.scene.current_view.mesh[:-4],
+            "sv_id": context.scene.current_view.sv_id,
             "reference_faces": self.reference_faces,
         }
 
         self.message = {"type": "add_brush", "data": brush_info}
 
         ws_client.send(self.message)
-
-        self.report({'INFO'}, f"[CREATE BRUSH] Creating: {self.brush_name}")
-
-        self.start_time = time.time()
-        # self.timeout = 30.0
-        # self.received = False
-
-        # wm = context.window_manager
-        # self._timer = wm.event_timer_add(0.1, window=context.window)
-        # wm.modal_handler_add(self)
-        while True: 
-            rec_message = ws_client.poll_bin_messages()
-            if rec_message is None:
-                pass
-            else:
-
-                msg = from_binary(rec_message)
-
-                if msg.get("brush icon") is not None:
-                    brush_icon = msg["brush icon"]
-
-                    brush_dir = os.path.join(
-                        context.scene.glaze_config.brushes_folder,
-                        self.brush.name,
-                    )
-                    os.makedirs(brush_dir, exist_ok=True)
-
-                    torchvision.utils.save_image(
-                        brush_icon.permute(2, 0, 1),
-                        os.path.join(brush_dir, "icon.png"),
-                    )
-
-                    self.report(
-                        {'INFO'},
-                        f"[CREATE BRUSH] done creating brush: {self.brush_name}",
-                    )
-
-                    #self._cleanup(context)
-                    return {'FINISHED'}
-
-        return {'RUNNING_MODAL'}
-
-    # def modal(self, context, event):
-    #     if event.type != 'TIMER':
-    #         return {'PASS_THROUGH'}
-
-    #     if time.time() - self.start_time > self.timeout:
-    #         self.report({'ERROR'}, "Brush creation timed out")
-    #         self._cleanup(context)
-    #         return {'CANCELLED'}
-
-    #     rec_message = ws_client.poll_bin_messages()
-    #     if rec_message is None:
-    #         return {'RUNNING_MODAL'}
-
-    #     msg = from_binary(rec_message)
-
-    #     if msg.get("brush icon") is not None:
-    #         brush_icon = msg["brush icon"]
-
-    #         brush_dir = os.path.join(
-    #             context.scene.glaze_config.brushes_folder,
-    #             self.brush.name,
-    #         )
-    #         os.makedirs(brush_dir, exist_ok=True)
-
-    #         torchvision.utils.save_image(
-    #             brush_icon.permute(2, 0, 1),
-    #             os.path.join(brush_dir, "icon.png"),
-    #         )
-
-    #         self.report(
-    #             {'INFO'},
-    #             f"[CREATE BRUSH] Brush created: {self.brush_name}",
-    #         )
-
-    #         self._cleanup(context)
-    #         return {'FINISHED'}
-
-    #     return {'RUNNING_MODAL'}
-
-    # def _cleanup(self, context):
-    #     wm = context.window_manager
-    #     if self._timer:
-    #         wm.event_timer_remove(self._timer)
-    #     self._timer = None
+        start_brush_listener(context, self.brush_name, self.brush_type, context.scene.current_view.sv_id)
+        return {'FINISHED'}
 
 
 class GLAZE_OT_SetBrush(bpy.types.Operator):
@@ -449,7 +282,6 @@ class GLAZE_OT_SetBrush(bpy.types.Operator):
     def execute(self, context):
         self.report({'INFO'}, f"Setting the current brush as: {self.brush_name}")
         context.scene.current_brush = self.brush_name
-        # TODO: any texture chnage in the scene?
         return {"FINISHED"}
 
 class GLAZE_OT_ClearBrushLib(bpy.types.Operator):
@@ -460,7 +292,6 @@ class GLAZE_OT_ClearBrushLib(bpy.types.Operator):
         context.scene.current_brush = ""
         context.scene.glaze_brushes.clear()
         self.report({'INFO'}, f"Clear All Brushes")
-        # TODO: any texture chnage in the scene?
         return {"FINISHED"}
 
     
@@ -496,6 +327,8 @@ class GLAZE_OT_remove_brush(bpy.types.Operator):
     def execute(self, context):
         remove_item_by_name(context.scene.glaze_brushes, self.brush_name)
         return {'FINISHED'}
+    
+################################## Texture Operators ####################################
 
 class GLAZE_OT_FillTexture(bpy.types.Operator):
     bl_idname = "glaze.fill"

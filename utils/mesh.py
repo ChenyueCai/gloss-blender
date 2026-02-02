@@ -10,6 +10,21 @@ import torch, torchvision
 import cv2
 import re
 
+
+def set_view_center(obj, area):
+    """Center a 3D View area on an object."""
+    for space in area.spaces:
+        if space.type == 'VIEW_3D':
+            space.region_3d.view_location = obj.location
+            space.region_3d.view_rotation = obj.matrix_world.to_quaternion()
+            break
+        
+def base_name(name):
+    # Matches "thing", "thing.001", "thing.123", even "thing.something.001"
+    m = re.match(r"^(.*?)(?:\.\d+)?$", name)
+    return m.group(1)
+
+
 def load_mesh(mesh_path, name="GlazeMesh", remove_existing=False):
     
     mesh_path = Path(mesh_path)
