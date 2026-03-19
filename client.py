@@ -1,21 +1,17 @@
-import bpy
 import asyncio
-import threading
-import websockets
 import json
-import os
-import time
-import torchvision
-from typing import Dict
-from .utils.mesh import update_texture
-from .utils.io import from_binary, to_binary
 import queue
+import threading
+from typing import Dict
 
+import bpy
+import websockets
 
-SERVER_URL = "ws://localhost:10019/websocket"
+SERVER_URL = "ws://localhost:10017/websocket"
 
 
 class WSClient:
+    """Singleton websocket client shared across Blender add-on reloads."""
     _instance = None
 
     def __new__(cls, *args, **kwargs):
@@ -34,9 +30,32 @@ class WSClient:
         self.loop = None
         self.thread = None
         self._running = False
-        self.send_queue = asyncio.Queue() 
-        self.receive_queue = [] # thread-safe list for Blender main thread
-        self.ws_chunks = queue.Queue() 
+        self.send_queue = None
+        self.receive_queue = []  # thread-safe list for Blender main thread
+        self.ws_chunks = queue.Queue()
+        self.status = "Disconnected"
+        self.last_error = ""
+
+    @property
+    def is_connected(self):
+        """Return ``True`` when a websocket connection object is available."""
+        return self.ws is not None
+
+    def _set_status(self, status, error=""):
+        """Store the latest user-facing connection status and error text."""
+        self.status = status
+        self.last_error = error
+
+    def configure(self, uri):
+        """Update the websocket endpoint used by future connections."""
+        self.uri = uri
+
+    def restart(self, uri=None):
+        """Reconnect the client, optionally switching to a new endpoint first."""
+        if uri:
+            self.configure(uri)
+        self.stop()
+        self.start()
 
     # ---------------------------------------------------------
     # Connection + Workers
@@ -44,11 +63,19 @@ class WSClient:
 
     async def connect(self):
         """Try connecting to the websocket."""
+        self._set_status(f"Connecting to {self.uri}")
         try:
-            self.ws = await websockets.connect(self.uri, max_size=400 * 4096*4096, ping_interval=20, ping_timeout=None)
+            self.ws = await websockets.connect(
+                self.uri,
+                max_size=400 * 4096 * 4096,
+                ping_interval=20,
+                ping_timeout=None,
+            )
             print("WS connected")
+            self._set_status(f"Connected to {self.uri}")
         except Exception as e:
             print("WS connect failed:", e)
+            self._set_status("Disconnected", str(e))
             await asyncio.sleep(1)
             self.ws = None
 
@@ -68,12 +95,14 @@ class WSClient:
                 print("Send failed — WS closed, retry with re-queuing...")
                 await self.send_queue.put(data)
                 self.ws = None
+                self._set_status("Disconnected", "Connection closed while sending")
                 await asyncio.sleep(0.5)
 
             except Exception as e:
                 print("Send failed:", e)
                 await self.send_queue.put(data)
                 self.ws = None
+                self._set_status("Disconnected", str(e))
                 await asyncio.sleep(1)
 
     async def receive_worker(self):
@@ -97,11 +126,13 @@ class WSClient:
             except websockets.ConnectionClosed:
                 print("Receive failed — WS closed, reconnecting...")
                 self.ws = None
+                self._set_status("Disconnected", "Connection closed while receiving")
                 await asyncio.sleep(0.5)
 
             except Exception as e:
                 print("Receive failed:", e)
                 self.ws = None
+                self._set_status("Disconnected", str(e))
                 await asyncio.sleep(1)
 
     async def main_worker(self):
@@ -119,6 +150,7 @@ class WSClient:
             except:
                 pass
         self.ws = None
+        self._set_status("Disconnected")
 
     # ---------------------------------------------------------
     # Start / Stop
@@ -133,20 +165,24 @@ class WSClient:
         print("Starting WS client...")
         self._running = True
 
-        # Do NOT recreate loop if it already exists (on reload)
         if self.loop is None:
             self.loop = asyncio.new_event_loop()
+        self.send_queue = asyncio.Queue()
 
         def runner():
             asyncio.set_event_loop(self.loop)
-            if self.send_queue is None:
-                self.send_queue = asyncio.Queue()
             self.loop.run_until_complete(self.main_worker())
 
         # Reuse existing thread if exists
         if self.thread is None or not self.thread.is_alive():
             self.thread = threading.Thread(target=runner, daemon=True)
             self.thread.start()
+
+        try:
+            if not bpy.app.timers.is_registered(self.poll_str_messages):
+                bpy.app.timers.register(self.poll_str_messages)
+        except:
+            pass
 
     def stop(self):
         """
@@ -155,7 +191,7 @@ class WSClient:
         """
         # Always unregister timer
         try:
-            bpy.app.timers.unregister(self.poll_messages)
+            bpy.app.timers.unregister(self.poll_str_messages)
         except:
             pass
 
@@ -179,6 +215,9 @@ class WSClient:
 
         self.thread = None
         self.loop = None
+        self.send_queue = None
+        self.ws = None
+        self._set_status("Disconnected")
 
         print("WS client fully stopped")
 
@@ -188,23 +227,22 @@ class WSClient:
 
     def send(self, data: dict):
         """Non-blocking send from Blender (thread-safe)."""
-        if self.loop:
-            asyncio.run_coroutine_threadsafe(
-                self.send_queue.put(data),
-                self.loop
-            )
+        if self.loop and self.send_queue is not None:
+            print(data)
+            asyncio.run_coroutine_threadsafe(self.send_queue.put(data), self.loop)
 
     def poll_str_messages(self):
         """Called by Blender every 0.2s on main thread."""
         while self.receive_queue:
             message = self.receive_queue.pop(0)
-                
+
             if isinstance(message, str):
                 print(message)
 
         return 0.2  # run again after 0.2s
 
     def poll_bin_messages(self):
+        """Return and consume the next queued binary message, if any."""
         while self.receive_queue:
             message = self.receive_queue.pop(0)
             if isinstance(message, bytes):
@@ -220,9 +258,10 @@ ws_client = WSClient()
 
 
 def register_client():
+    """Start the shared websocket client for the add-on."""
     ws_client.start()
-    bpy.app.timers.register(ws_client.poll_str_messages)
 
 
 def unregister_client():
+    """Stop the shared websocket client for the add-on."""
     ws_client.stop()

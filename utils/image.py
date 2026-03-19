@@ -5,6 +5,7 @@ import numpy as np
 
 
 def list_images(folder_path):
+    """Return supported image files in ``folder_path`` sorted by name."""
     folder_path = Path(folder_path)
     return sorted([p for p in folder_path.iterdir() if p.suffix.lower() in [".png", ".jpg", ".jpeg"]])
 
@@ -13,6 +14,12 @@ preview_collection = None
 brush_preview_collection = None
 
 def get_preview(path):
+    """Load or reuse a preview icon for an image file.
+
+    Returns:
+        int: Blender preview icon id, or ``0`` when the preview cannot be
+        loaded.
+    """
     global preview_collection
 
     if preview_collection is None:
@@ -33,6 +40,11 @@ def get_preview(path):
         return 0
 
 def get_brush_preview(path):
+    """Load or reuse a preview icon for a brush icon image.
+
+    Brush previews are cached by the parent folder name so each brush keeps a
+    stable icon entry across UI redraws.
+    """
     global brush_preview_collection
 
     if brush_preview_collection is None:
@@ -54,9 +66,12 @@ def get_brush_preview(path):
 
 
 def get_single_view_files(self, context):
-    """
-    Dynamically populate EnumProperty with all files in
-    the folder specified in glaze_config.single_views_folder
+    """Build EnumProperty items from ``glaze_config.single_views_folder``.
+
+    Returns:
+        list[tuple[str, str, str]]: File choices for Blender UI enums. When no
+        image files are available, returns a single ``("NONE", ...)`` fallback
+        entry.
     """
     folder = context.scene.glaze_config.single_views_folder
     items = []
@@ -71,4 +86,3 @@ def get_single_view_files(self, context):
         items.append(('NONE', 'No files found', ''))
 
     return items
-

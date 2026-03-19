@@ -67,6 +67,13 @@ MESSAGE_CONTENT_KEY = 'msg'
 
 
 def encode_message(tag, content, binary=True):
+    """Encode a tagged message as binary bytes or JSON text.
+
+    Example:
+        >>> payload = encode_message("ping", {"ok": 1}, binary=False)
+        >>> payload
+        '{"tag": "ping", "msg": {"ok": 1}}'
+    """
     msg = {MESSAGE_TAG_KEY: tag, MESSAGE_CONTENT_KEY: content}
     if binary:
         return to_binary(msg)
@@ -75,10 +82,17 @@ def encode_message(tag, content, binary=True):
 
 
 def to_binary(value):
+    """Serialize a supported value into the project's aligned binary format."""
     return value_to_binary(value, 0)
 
 
 def from_binary(bytes_msg: bytes):
+    """Deserialize a value encoded with :func:`to_binary`.
+
+    Example:
+        >>> from_binary(to_binary({"value": 3}))["value"]
+        3
+    """
     res, read_bytes = value_from_binary(bytes_msg, 0)
     if read_bytes != len(bytes_msg):
         logger.warning(f'Read {read_bytes}, not full message length {len(bytes_msg)}')
@@ -105,6 +119,7 @@ def np_type_from_type_id(type_id):
 
 
 def value_to_type(converted_value):
+    """Return the binary type enum used to encode ``converted_value``."""
     if isinstance(converted_value, str):
         return BinaryIoDataType.STRING
     elif isinstance(converted_value, collections.abc.Mapping):
@@ -118,6 +133,11 @@ def value_to_type(converted_value):
 
 
 def convert_value_to_supported_format(value):
+    """Normalize Python values into encodable strings, mappings, lists, or arrays.
+
+    Torch tensors are moved to CPU NumPy arrays. Numeric lists are packed into
+    NumPy arrays, while mixed-type lists stay as Python lists.
+    """
     if isinstance(value, str):
         return value
     elif torch.is_tensor(value):
@@ -169,6 +189,7 @@ def gap_until_offset_n(current_offset: int, n: int) -> int:
 
 
 def gap_until_offset_4(current_offset: int) -> int:
+    """Return padding bytes needed to align ``current_offset`` to 4 bytes."""
     return gap_until_offset_n(current_offset, 4)
 
 
@@ -204,6 +225,12 @@ def string_to_binary(string):
 
 
 def typed_value_from_binary(bytes_msg, offset, length, type_code):
+    """Decode a value of a known binary type from ``bytes_msg``.
+
+    Returns:
+        tuple[Any, int]: The decoded value and the number of bytes consumed from
+        ``offset`` onward.
+    """
     # Length is byte length for strings, but num elements for other types
     if type_code == BinaryIoDataType.STRING:
         return string_from_binary(bytes_msg, offset, length), length
@@ -224,6 +251,12 @@ def typed_value_from_binary(bytes_msg, offset, length, type_code):
 
 
 def value_from_binary(bytes_msg, offset):
+    """Decode one aligned value starting at ``offset``.
+
+    Returns:
+        tuple[Any, int]: The decoded value and total bytes consumed, including
+        alignment padding and metadata.
+    """
     read_bytes = gap_until_offset_4(offset)
 
     metadata_length = 2
@@ -255,6 +288,18 @@ def value_from_binary(bytes_msg, offset):
 
 
 def value_to_binary(in_value, initial_offset=0):
+    """Encode a supported value starting at ``initial_offset``.
+
+    Args:
+        in_value: Value to encode.
+        initial_offset: Existing byte offset used to compute alignment padding.
+
+    Returns:
+        bytes: Encoded representation of ``in_value``.
+
+    Raises:
+        ValueError: If the value cannot be represented by the binary protocol.
+    """
     is_primitive_number = isinstance(in_value, int) or isinstance(in_value, float)
     value = convert_value_to_supported_format(in_value)
 
@@ -294,6 +339,7 @@ def value_to_binary(in_value, initial_offset=0):
 
 
 def named_value_from_binary(bytes_msg, offset):
+    """Decode a length-prefixed key followed by a binary-encoded value."""
     read_bytes = gap_until_offset_4(offset)
     name_length = np.frombuffer(bytes_msg, dtype=np.int32, count=1, offset=offset + read_bytes)[0]  # in bytes
     read_bytes += 4
@@ -305,6 +351,7 @@ def named_value_from_binary(bytes_msg, offset):
 
 
 def named_value_to_binary(name, value, initial_offset=0):
+    """Encode a string key followed by a binary-encoded value."""
     # We assume offset is appropriate for int32
     bin_str = string_to_binary(name)
     result = bytes(gap_until_offset_4(initial_offset))
@@ -315,16 +362,15 @@ def named_value_to_binary(name, value, initial_offset=0):
 
 
 def _dict_from_binary(bytes_msg, length, offset=0):
-    """Converts bytes message to dictionary.
-    Must be compatible with: nvidia.Controller.prototype.encodeDrawingRequest.
+    """Decode ``length`` named values into a dictionary.
 
     Args:
-        @param bytes_msg: raw bytes to decode
-        @param offset: start read offset in bytes
-        @param length: number of key-value pairs
+        bytes_msg: Raw bytes to decode.
+        length: Number of key-value pairs to read.
+        offset: Start read offset in bytes.
 
-    Return:
-        metadata dict, total_read_bytes
+    Returns:
+        tuple[dict, int]: Decoded mapping and total bytes consumed.
     """
     total_read_bytes = 0
     res = {}
@@ -337,15 +383,15 @@ def _dict_from_binary(bytes_msg, length, offset=0):
 
 
 def _list_from_binary(bytes_msg, length, offset=0):
-    """Converts bytes message to list.
+    """Decode ``length`` sequential values into a list.
 
     Args:
-        @param bytes_msg: raw bytes to decode
-        @param offset: start read offset in bytes
-        @param length: number of elements
+        bytes_msg: Raw bytes to decode.
+        length: Number of elements to read.
+        offset: Start read offset in bytes.
 
-    Return:
-        list, total_read_bytes
+    Returns:
+        tuple[list, int]: Decoded list and total bytes consumed.
     """
     total_read_bytes = 0
     res = []
@@ -359,10 +405,12 @@ def _list_from_binary(bytes_msg, length, offset=0):
 
 
 def int32_to_binary(single_int):
+    """Encode one integer as a 4-byte little-endian NumPy int32 buffer."""
     return np.array([single_int], dtype=np.int32).tobytes()
 
 
 def _dict_to_binary(in_dict, initial_offset=0):
+    """Encode a dictionary as sequential named values."""
     result = bytes()
 
     for name, value in in_dict.items():
@@ -371,6 +419,7 @@ def _dict_to_binary(in_dict, initial_offset=0):
 
 
 def _list_to_binary(in_list, initial_offset=0):
+    """Encode a list as sequential binary values."""
     result = bytes()
 
     for value in in_list:
@@ -378,9 +427,7 @@ def _list_to_binary(in_list, initial_offset=0):
     return result
 
 def split_tensor(tensor, max_chunk_bytes=1_000_000):
-    """
-    Returns a list of smaller tensors, each <= max_chunk_bytes.
-    """
+    """Split a tensor into contiguous chunks no larger than ``max_chunk_bytes``."""
     bytes_per_elem = tensor.element_size()        # e.g., float32 = 4 bytes
     total_elems = tensor.numel()
     elems_per_chunk = max_chunk_bytes // bytes_per_elem
@@ -396,14 +443,16 @@ def split_tensor(tensor, max_chunk_bytes=1_000_000):
     return chunks
 
 def send_large_image(name: str, task_name: str, image: np.ndarray, chunk_size: int = 10_000_000):
-    """
-    Send a large image through WebSocket in multiple binary chunks.
-    
-    Parameters:
-        ws          : websocket connection
-        name        : image name string
-        image_bytes : full binary data of the image
-        chunk_size  : size in bytes (default: 1MB)
+    """Package an image array into chunked websocket message dictionaries.
+
+    Args:
+        name: Logical image name included in each chunk message.
+        task_name: Server task identifier stored in each message.
+        image: Flat or shaped NumPy array containing image data.
+        chunk_size: Maximum chunk size in bytes before the tensor is split.
+
+    Returns:
+        list[dict]: Binary-ready message payloads containing tensor chunks.
     """
     chunks = split_tensor(torch.from_numpy(image), max_chunk_bytes=chunk_size)
     total_chunks = len(chunks)
@@ -419,4 +468,3 @@ def send_large_image(name: str, task_name: str, image: np.ndarray, chunk_size: i
             "image": chunk,
         })
     return msgs  # your binary-packer function
-

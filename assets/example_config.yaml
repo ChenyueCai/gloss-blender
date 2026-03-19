@@ -1,7 +1,8 @@
-mesh_file_path: /Users/chenyuecai/Desktop/assets/meshes
-single_views_folder: /Users/chenyuecai/Desktop/assets/eval_cond_views
-single_views_cam_folder: /Users/chenyuecai/Desktop/assets/eval_metas
-single_views_texture_folder: /Users/chenyuecai/Desktop/assets/eval_textures_sr
-brushes_folder: /Users/chenyuecai/Desktop/assets/brushes
+server_url: ws://localhost:10017/websocket
+mesh_folder: /Users/chenyuecai/Desktop/workspace/GLOSS/assets/data/meshes/objs/train_meshes_obj
+single_views_folder: /Users/chenyuecai/Desktop/workspace/GLOSS/assets/data/eval_data/eval_cond_views
+single_views_cam_folder: /Users/chenyuecai/Desktop/workspace/GLOSS/assets/data/eval_data/eval_metas
+single_views_texture_folder: /Users/chenyuecai/Desktop/workspace/GLOSS/assets/data/eval_data/eval_textures_sr
+brushes_folder: /Users/chenyuecai/Desktop/workspace/GLOSS/assets/data/brushes
 preload_mode: test
-cache_folder: /Users/chenyuecai/Desktop/assets/cache
+cache_folder: /Users/chenyuecai/Desktop/workspace/GLOSS/assets/data/cache

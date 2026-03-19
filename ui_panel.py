@@ -1,12 +1,13 @@
 import bpy
 import os
 import bpy.utils.previews
+from .backend import server_status_icon, server_status_text
 from .utils.image import get_preview, get_brush_preview
-from .client import ws_client
 from .utils.mesh import is_normal_connected
 
 
 class GLAZE_PT_Panel(bpy.types.Panel):
+    """Sidebar UI for configuring assets, textures, and brush actions."""
     bl_label = "GlazePanel"
     bl_idname = "GLAZE_PT_Panel"
     bl_space_type = "VIEW_3D"
@@ -14,97 +15,100 @@ class GLAZE_PT_Panel(bpy.types.Panel):
     bl_category = "Glaze"
 
     def draw(self, context):
+        """Render the add-on controls in the 3D View sidebar."""
         layout = self.layout
-        row = layout.row()
-        row.label(text="Utilities", icon="MESH_CUBE")
-    
-        layout.operator("glaze.load_config", text="Load Glaze Config")
-        layout.operator("glaze.glaze_reload_addon", icon="FILE_REFRESH")
-        
-        # LOAD MESH
-        row = layout.row(align=True)
-        row.label(text="Meshes:", icon="MESH_CUBE")
-        row = layout.row(align=True)
-        row.operator("glaze.load_reference_mesh", text="Load Reference")
-        row.operator("glaze.load_paint_mesh", text="Load Paint")
+        scene = context.scene
+        current_view = scene.current_view
+        session = scene.glaze_session
 
-        # LOAD REF IMAGE
-        split = layout.split(factor=0.6)
-        col_left = split.column(align=True)
-        col_left.label(text="Reference View", icon="IMAGE_REFERENCE")
-        # Display filename if loaded
-        if context.scene.current_view:
-            filename = bpy.path.basename(context.scene.current_view.image_path)
-            col_left.label(text=f"File: {filename}")
+        server_box = layout.box()
+        server_box.label(text="Server", icon="URL")
+        server_box.prop(scene.glaze_config, "server_url", text="")
+        status_row = server_box.row(align=True)
+        status_row.label(text=server_status_text(), icon=server_status_icon())
+        status_row.operator("glaze.reconnect_server", text="Reconnect", icon="FILE_REFRESH")
+
+        util_row = server_box.row(align=True)
+        util_row.operator("glaze.load_config", text="Load Config", icon="FILE_FOLDER")
+        util_row.operator("glaze.glaze_reload_addon", text="Reload Add-on", icon="FILE_REFRESH")
+
+        asset_box = layout.box()
+        asset_box.label(text="Assets", icon="MESH_DATA")
+        mesh_row = asset_box.row(align=True)
+        mesh_row.operator("glaze.load_reference_mesh", text="Load Reference Mesh")
+        mesh_row.operator("glaze.load_paint_mesh", text="Load Paint Mesh")
+
+        asset_box.label(
+            text=f"Reference Mesh: {scene.current_reference_mesh.name if scene.current_reference_mesh else 'None'}"
+        )
+        asset_box.label(
+            text=f"Paint Mesh: {scene.current_paint_mesh.name if scene.current_paint_mesh else 'None'}"
+        )
+
+        ref_split = asset_box.split(factor=0.62)
+        ref_left = ref_split.column(align=True)
+        ref_right = ref_split.column(align=True)
+
+        ref_left.label(text="Reference Image", icon="IMAGE_REFERENCE")
+        ref_left.label(
+            text=bpy.path.basename(current_view.image_path) if current_view.image_path else "No file selected"
+        )
+        ref_left.operator("glaze.load_reference_view", text="Choose Reference Image")
+        ref_left.operator("glaze.set_reference", text="Apply to Reference Mesh")
+
+        ref_right.label(text="Preview", icon="IMAGE_DATA")
+        if current_view.image_path:
+            icon_id = get_preview(current_view.image_path)
+            ref_right.template_icon(icon_id, scale=4)
         else:
-            col_left.label(text="No file selected")
-        row = col_left.row(align=True)
-        row.operator("glaze.load_reference_view", text="Select File")
-        
-        # SHOW MESH REFERENCE
-        row = col_left.row(align=True)
-        row.operator("glaze.set_reference", text="Show on Mesh")
+            ref_right.label(text="(No Image)")
 
-        col_right = split.column(align=True)
-        col_right.label(text="Preview", icon="VIEW_ZOOM")
-        if context.scene.current_view.image_path != "":
-            icon_id = get_preview(context.scene.current_view.image_path)
-            col_right.template_icon(icon_id, scale=4)
-        else:
-            col_right.label(text="(No Image)")
-            
-        # SELECTION MODE
-        split = layout.split(factor=0.2)
-        col_left = split.column(align=True)
-        col_left.label(text="Selection Mode", icon="USER")
-        col_right = split.row(align=True)
-        
-        col_right.prop(context.scene.inference_view_settings, "selection_mode", expand=True)
-        # UNLIMITED CAMERA VIEW UPDATE
-        layout.prop(context.scene, "full_cam_view_update")
+        tex_box = asset_box.box()
+        tex_box.label(text="Paint Texture", icon="TEXTURE")
+        tex_box.label(
+            text=bpy.path.basename(session.loaded_paint_texture) if session.loaded_paint_texture else "No paint texture loaded"
+        )
+        tex_row = tex_box.row(align=True)
+        tex_row.operator("glaze.load_paint_texture", text="Load Texture")
+        tex_row.prop(session, "auto_sync_texture", text="Auto Sync")
 
-            
-        # PAINT MODE
-        split = layout.split(factor=0.2)
-        col_left = split.column(align=True)
-        col_left.label(text="Paint Mode", icon="USER")
-        # Right button region
-        col_right = split.row(align=True)
-        
-        # Column 1: FILL
-        col_fill = col_right.column(align=True)
-        col_fill.operator("glaze.fill", text="FILL")
-        
-        # Column 2: CLEAR TEXTURE
-        col_clear = col_right.column(align=True)
-        col_clear.operator("glaze.clear_texture", text="CLEAR")
-        
-        # INFERENCE FACE MODE
-        layout.prop(context.scene, "update_texture_4k")
-        
-        row = layout.row()
-        col1 = row.column()
-        col2 = row.column()
-        col3 = row.column()
-        col1.operator("glaze.undo_texture", text="Undo")
-        col2.operator("glaze.set_texture", text="Set Texture")
-        col3.operator("glaze.clear_all_texture", text="Clear All Texture")
-        
+        gen_box = layout.box()
+        gen_box.label(text="Generation", icon="BRUSH_DATA")
+        top_row = gen_box.row(align=True)
+        top_row.operator("glaze.fill", text="Generate Texture", icon="PLAY")
+        top_row.operator("glaze.clear_texture", text="Clear Faces", icon="X")
+        top_row.prop(scene, "update_texture_4k")
+
+        settings_row = gen_box.row(align=True)
+        settings_row.prop(scene, "cam_dist")
+        settings_row.prop(scene, "max_cameras")
+
+        flags_row = gen_box.row(align=True)
+        flags_row.prop(scene, "clip_fill_to_faces")
+        flags_row.prop(scene, "dilate")
+        flags_row.prop(scene, "soft_add")
+
+        brush_name = scene.current_brush if scene.current_brush else "None"
+        gen_box.label(text=f"Active Brush: {brush_name}")
+
+        action_row = gen_box.row(align=True)
+        action_row.operator("glaze.undo_texture", text="Undo")
+        action_row.operator("glaze.set_texture", text="Sync to Server")
+        action_row.operator("glaze.clear_all_texture", text="Clear All")
+
         if context.object is not None:
             mat = context.object.active_material
-            row = layout.row(align=True)
-            row.operator("material.toggle_normal_map",
+            normal_row = gen_box.row(align=True)
+            normal_row.operator("material.toggle_normal_map",
                         text=("Disconnect Normal" if mat and is_normal_connected(mat)
                             else "Connect Normal"),
                         icon="NORMALS_VERTEX")
         
-        # CREATE BRUSHES
-        row = layout.row(align=True)
-        row.label(text="Brushes 🎨", icon="BRUSHES_ALL")
+        brush_box = layout.box()
+        brush_box.label(text="Brush Library", icon="BRUSHES_ALL")
         
         columns = 3
-        scale = 4
-        grid = layout.grid_flow(
+        grid = brush_box.grid_flow(
             row_major=True,
             columns=columns,
             even_columns=True,
@@ -125,7 +129,7 @@ class GLAZE_PT_Panel(bpy.types.Panel):
             )
             op.brush_name = brush.name
             
-        split_layout = layout.split(factor=0.8)
+        split_layout = brush_box.split(factor=0.8)
         box = split_layout.column().box()
         box.label(text="Create New Brushes")
         split =  box.split(factor=0.45)
@@ -140,9 +144,4 @@ class GLAZE_PT_Panel(bpy.types.Panel):
         op.brush_name = context.scene.new_brush_name
         
         split_layout.column().operator("glaze.clear_brush_lib", text="Clear All")
-        
-        row = layout.row(align=True)
-        row = layout.row(align=True)
-        row.label(text="UI-2", icon="MESH_CUBE")
-        layout.operator("glaze.hunyuan", text="Load Model Two Output")
      

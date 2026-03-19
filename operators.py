@@ -1,19 +1,16 @@
 import bpy
 import bmesh
 
+from .backend import clear_all_texture, load_paint_texture, send_clear_request, send_fill_request, sync_paint_texture
 from .utils.config import load_glaze_config_from_yaml
-from .utils.mesh import load_mesh, apply_texture, update_texture, get_current_texture, undo_texture, \
-    is_normal_connected, disconnect_normal, connect_normal, clear_texture, set_view_center, base_name
-from .utils.io import to_binary, from_binary, send_large_image
+from .utils.mesh import load_mesh, apply_texture, undo_texture, \
+    is_normal_connected, disconnect_normal, connect_normal, set_view_center, base_name
+from .utils.io import from_binary
 from .client import ws_client
 
-import re
 import os
-import torchvision, torch
-import numpy as np
-import time
-
-from queue import Empty
+import re
+import torchvision
 
 
 class GLAZE_OT_LoadReferenceMesh(bpy.types.Operator):
@@ -65,7 +62,9 @@ class GLAZE_OT_LoadPaintMesh(bpy.types.Operator):
         set_view_center(paint_mesh, left_area)
         # remove the basecolor slots
         apply_texture(paint_mesh, None, suffix='paint')
-        mesh_info = {"mesh_name": base_name(paint_mesh.name)[:-4], "paint_mesh_name": paint_mesh.name}
+        context.scene.glaze_session.loaded_paint_texture = ""
+        mesh_info = {"mesh_name": base_name(paint_mesh.name)[:-4], "paint_mesh_name": paint_mesh.name,
+                     "high_res": context.scene.update_texture_4k}
         message = {"type": "add_pnt_mesh", 
                    "data": mesh_info}
         ws_client.send(message)
@@ -88,6 +87,7 @@ class GLAZE_OT_LoadConfig(bpy.types.Operator):
         cfg = scene.glaze_config
 
         load_glaze_config_from_yaml(self.filepath)
+        ws_client.configure(cfg.server_url)
 
         self.report({'INFO'}, f"Config loaded from {self.filepath}")
         return {'FINISHED'}
@@ -103,13 +103,34 @@ class GLAZE_OT_SetReference(bpy.types.Operator):
     bl_label = "Set Reference"
 
     def execute(self, context):
+        if context.scene.current_reference_mesh is None:
+            self.report({'ERROR'}, "Load a reference mesh before applying a reference image")
+            return {'CANCELLED'}
+
         curr_view = context.scene.current_view
         single_view_path = curr_view.image_path
-        curr_view.sv_id = int(os.path.basename(single_view_path).split('.')[0][4:])
+        if not single_view_path:
+            self.report({'ERROR'}, "Choose a reference image first")
+            return {'CANCELLED'}
+
         curr_view.mesh = base_name(context.scene.current_reference_mesh.name)
-        single_view_texture_path = os.path.join(context.scene.glaze_config.single_views_texture_folder, curr_view.mesh[:-4], "view%04d.png" % curr_view.sv_id)
-        apply_texture(bpy.data.objects.get(curr_view.mesh), single_view_texture_path, suffix='ref')
-        self.report({'INFO'}, f"Selected Single View index: {curr_view.sv_id} - Mesh {curr_view.mesh}")
+        texture_path = single_view_path
+        match = re.match(r"view(\d+)\.", os.path.basename(single_view_path))
+
+        if match:
+            curr_view.sv_id = int(match.group(1))
+            single_view_texture_path = os.path.join(
+                context.scene.glaze_config.single_views_texture_folder,
+                curr_view.mesh[:-4],
+                f"view{curr_view.sv_id:04d}.png",
+            )
+            if os.path.exists(single_view_texture_path):
+                texture_path = single_view_texture_path
+        else:
+            curr_view.sv_id = -1
+
+        apply_texture(context.scene.current_reference_mesh, texture_path, suffix='ref')
+        self.report({'INFO'}, f"Applied reference image to {context.scene.current_reference_mesh.name}")
         return {'FINISHED'}
 
 
@@ -129,9 +150,47 @@ class GLAZE_OT_LoadReferenceView(bpy.types.Operator):
         return {'FINISHED'}
 
 
+class GLAZE_OT_LoadPaintTexture(bpy.types.Operator):
+    """Load a texture onto the current paint mesh"""
+    bl_idname = "glaze.load_paint_texture"
+    bl_label = "Load Paint Texture"
+
+    filepath: bpy.props.StringProperty(subtype="FILE_PATH")
+
+    def invoke(self, context, event):
+        context.window_manager.fileselect_add(self)
+        return {'RUNNING_MODAL'}
+
+    def execute(self, context):
+        try:
+            load_paint_texture(
+                context,
+                self.filepath,
+                sync_to_server=context.scene.glaze_session.auto_sync_texture,
+            )
+        except RuntimeError as exc:
+            self.report({'ERROR'}, str(exc))
+            return {'CANCELLED'}
+
+        self.report({'INFO'}, f"Loaded paint texture {os.path.basename(self.filepath)}")
+        return {'FINISHED'}
+
+
+class GLAZE_OT_ReconnectServer(bpy.types.Operator):
+    """Reconnect to the websocket server"""
+    bl_idname = "glaze.reconnect_server"
+    bl_label = "Reconnect Server"
+
+    def execute(self, context):
+        ws_client.restart(context.scene.glaze_config.server_url)
+        self.report({'INFO'}, f"Reconnecting to {context.scene.glaze_config.server_url}")
+        return {'FINISHED'}
+
+
 ################################## Brush Operators Utils ####################################
 
 def brush_exists(scene, name):
+    """Return ``True`` when ``scene.glaze_brushes`` already contains ``name``."""
     for b in scene.glaze_brushes:
         if b.name == name:
             return True
@@ -139,6 +198,12 @@ def brush_exists(scene, name):
 
 
 def start_brush_listener(context, brush_name, brush_type, brush_sv_id):
+    """Poll for a generated brush icon and register the brush when it arrives.
+
+    Side Effects:
+        Creates the brush icon directory on disk, writes ``icon.png``, appends a
+        brush entry to ``scene.glaze_brushes``, and registers a Blender timer.
+    """
     def _poll():
         rec_message = ws_client.poll_bin_messages()
         if rec_message is None:
@@ -274,6 +339,7 @@ class GLAZE_OT_create_ref_brushes(bpy.types.Operator):
 
 
 class GLAZE_OT_SetBrush(bpy.types.Operator):
+    """Set the active brush used for fill requests."""
     bl_idname = "glaze.set_brush"
     bl_label = "Set Brush"
 
@@ -285,6 +351,7 @@ class GLAZE_OT_SetBrush(bpy.types.Operator):
         return {"FINISHED"}
 
 class GLAZE_OT_ClearBrushLib(bpy.types.Operator):
+    """Clear the in-memory brush library for the current scene."""
     bl_idname = "glaze.clear_brush_lib"
     bl_label = "Clear Brush Library"
 
@@ -296,6 +363,7 @@ class GLAZE_OT_ClearBrushLib(bpy.types.Operator):
 
     
 class GLAZE_OT_save_brush(bpy.types.Operator):
+    """Ask the server to persist a named brush."""
     bl_idname = "glaze.save_brush"
     bl_label = "Save Brush"
 
@@ -311,6 +379,7 @@ class GLAZE_OT_save_brush(bpy.types.Operator):
 
 
 def remove_item_by_name(collection, name):
+    """Remove the first item named ``name`` from a Blender collection."""
     for i, item in enumerate(collection):
         if item.name == name:
             collection.remove(i)
@@ -318,6 +387,7 @@ def remove_item_by_name(collection, name):
     return False
 
 class GLAZE_OT_remove_brush(bpy.types.Operator):
+    """Remove a brush entry from the scene collection."""
     bl_idname = "glaze.remove_brush"
     bl_label = "Remove Brush"
     bl_options = {'UNDO'}
@@ -327,304 +397,87 @@ class GLAZE_OT_remove_brush(bpy.types.Operator):
     def execute(self, context):
         remove_item_by_name(context.scene.glaze_brushes, self.brush_name)
         return {'FINISHED'}
-    
+
+
 ################################## Texture Operators ####################################
 
 class GLAZE_OT_FillTexture(bpy.types.Operator):
+    """Send a texture generation request for the selected faces."""
     bl_idname = "glaze.fill"
-    bl_label = "Fill Texture"
+    bl_label = "Generate Texture"
     bl_options = {'REGISTER', 'UNDO'} 
 
     def execute(self, context):
-        obj = context.scene.current_paint_mesh
-        context.scene.target_faces.clear()
-        bm = bmesh.from_edit_mesh(obj.data)
-        bm.faces.ensure_lookup_table()
-        target_faces = []
-        for f in bm.faces:
-            if f.select:
-                entry = context.scene.target_faces.add()
-                entry.index = f.index
-                target_faces.append(f.index)
-                self.report({'INFO'}, f"Adding {f.index} as a target face")
-        
-        fill_info = {"target_faces": target_faces,
-                    "mesh_name": base_name(context.scene.current_paint_mesh.name),
-                    "brush_name": context.scene.current_brush, "high_res": context.scene.update_texture_4k,
-                    "mode": context.scene.inference_view_settings.selection_mode,
-                    "update": context.scene.full_cam_view_update}
-        message = {"type": "fill",
-                "data": fill_info}
-            
-        if ws_client.ws is None:
-            self.report({'ERROR'}, f"Server not connected")
-            return {'FINISHED'}
-        
-        ws_client.send(message)
-
-        
-        self.start_time = time.time()
-        self.timeout = 30.0
-
-        self.textures_meta = {}
-        self.num_completed_views = 0
-        self.expected_views = None
-
-        # ------------------------------
-        # Start modal timer
-        # ------------------------------
-        wm = context.window_manager
-        self._timer = wm.event_timer_add(0.1, window=context.window)
-        wm.modal_handler_add(self)
-
-        return {'RUNNING_MODAL'}
-    # ------------------------------
-    
-    def modal(self, context, event):
-        obj = context.scene.current_paint_mesh
-        if event.type != 'TIMER':
-            return {'PASS_THROUGH'}
-
-        # Timeout guard
-        if time.time() - self.start_time > self.timeout:
-            self.report({'ERROR'}, "Texture fill timed out")
-            self._cleanup(context)
+        try:
+            target_faces = send_fill_request(context)
+        except RuntimeError as exc:
+            self.report({'ERROR'}, str(exc))
             return {'CANCELLED'}
 
-        while True:
-            try:
-                rec_message = ws_client.ws_chunks.get_nowait()
-            except Empty:
-                break
+        context.scene.target_faces.clear()
+        for face_index in target_faces:
+            entry = context.scene.target_faces.add()
+            entry.index = face_index
 
-            if not isinstance(rec_message, bytes):
-                continue
-
-            msg = from_binary(rec_message)
-
-            if msg.get("chunk_total") is None:
-                continue
-
-            image_name = msg.get("name")
-            chunk_index = msg.get("chunk_index")
-            chunk_total = msg.get("chunk_total")
-            view_id = msg.get("view_id")
-            num_views = msg.get("num_views")
-            image_chunk = msg.get("image")
-
-            self.expected_views = num_views
-
-            print(f"[LOG] {image_name}: {chunk_index + 1} / {chunk_total}")
-
-            if view_id not in self.textures_meta:
-                self.textures_meta[view_id] = {}
-
-            if chunk_index not in self.textures_meta[view_id]:
-                self.textures_meta[view_id][chunk_index] = image_chunk
-
-            # View complete
-            if len(self.textures_meta[view_id]) == chunk_total:
-                ordered = [
-                    self.textures_meta[view_id][k]
-                    for k in sorted(self.textures_meta[view_id].keys())
-                ]
-                image = torch.cat(ordered)
-                if context.scene.update_texture_4k:
-                    image = image.reshape((4096, 4096, 4))
-                else:
-                    image = image.reshape((1024, 1024, 4))
-
-                image = image.cpu()
-                update_texture(obj, image)
-
-                self.num_completed_views += 1
-
-        # All views complete
-        if (
-            self.expected_views is not None
-            and self.num_completed_views >= self.expected_views
-        ):
-            self._cleanup(context)
-            self.report({'INFO'}, "[FILL TEXTURE] Completed all views")
-            return {'FINISHED'}
-
-        return {'RUNNING_MODAL'}
+        self.report({'INFO'}, "Texture generation request sent")
+        return {'FINISHED'}
 
 
-    def _cleanup(self, context):
-        wm = context.window_manager
-        if self._timer:
-            wm.event_timer_remove(self._timer)
-        self._timer = None
-
-
-
-###############################
-###### TEXTURE OPERATORS ######
-################################
 class GLAZE_OT_SetPaintTexture(bpy.types.Operator):
+    """Push the active paint texture to the server."""
     bl_idname = "glaze.set_texture"
     bl_label = "Sync Texture with server"
     bl_options = {'REGISTER', 'UNDO'} 
     
-    def execute(self, context): #TODO:
-        # send the current texture to server
-        if ws_client.ws is None:
-            self.report({'ERROR'}, f"Server not connected")
-            return {'FINISHED'}
-        if context.scene.update_texture_4k:
-            h = w = 4096
-        else:
-            h = w = 1024
-        buffer_size = h * w * 4 
-        paint_obj = context.scene.current_paint_mesh
-        current_paint_texture = get_current_texture(paint_obj)
-        current_texture_pixels = np.empty(buffer_size, dtype=np.float32)
-        current_paint_texture.pixels.foreach_get(current_texture_pixels)
-        msgs = send_large_image("texture", "set_texture", current_texture_pixels)
-        for msg in msgs:
-            msg["mesh_name"] = context.scene.current_paint_mesh.name
-            #self.report()({'INFO'}, f"Sending {msg["mesh_name"]} texture to server...")
-            ws_client.send(to_binary(msg)) 
+    def execute(self, context):
+        try:
+            sync_paint_texture(context)
+        except RuntimeError as exc:
+            self.report({'ERROR'}, str(exc))
+            return {'CANCELLED'}
+
+        self.report({'INFO'}, "Paint texture synced to server")
         return {"FINISHED"}
 
 
 class GLAZE_OT_ClearAllPaintTexture(bpy.types.Operator):
+    """Clear the entire active paint texture."""
     bl_idname = "glaze.clear_all_texture"
     bl_label = "Clear All Texture"
     bl_options = {'REGISTER', 'UNDO'} 
     
     def execute(self, context): 
-        clear_texture(context.scene.current_paint_mesh)
-        mesh_info = {"paint_mesh_name": context.scene.current_paint_mesh.name}
-        payload = {"type": "clear_all_texture",
-                   "data": mesh_info}
-        ws_client.send(payload)
+        try:
+            clear_all_texture(context)
+        except RuntimeError as exc:
+            self.report({'ERROR'}, str(exc))
+            return {'CANCELLED'}
+
+        self.report({'INFO'}, "Cleared the active paint texture")
         return {"FINISHED"}
+
         
 class GLAZE_OT_ClearPaintTexture(bpy.types.Operator):
+    """Send a clear request for the selected faces."""
     bl_idname = "glaze.clear_texture"
     bl_label = "Clear Selected Face Texture"
     bl_options = {'REGISTER', 'UNDO'} 
     
     def execute(self, context):
-        obj = context.scene.current_paint_mesh
-        context.scene.target_faces.clear()
-        bm = bmesh.from_edit_mesh(obj.data)
-        bm.faces.ensure_lookup_table()
-        target_faces = []
-        for f in bm.faces:
-            if f.select:
-                entry = context.scene.target_faces.add()
-                entry.index = f.index
-                target_faces.append(f.index)
-                self.report({'INFO'}, f"Adding {f.index} as a target face")  
-        clear_info = {"target_faces": target_faces,
-                    "mesh_name": base_name(context.scene.current_paint_mesh.name)}
-        message = {"type": "clear_face",
-                "data": clear_info}
-        
-        if ws_client.ws is None:
-            self.report({'ERROR'}, f"Server not connected")
-            return {'FINISHED'}
-        
-        ws_client.send(message)
-
-        
-        self.start_time = time.time()
-        self.timeout = 30.0
-
-        self.textures_meta = {}
-        self.num_completed_views = 0
-        self.expected_views = None
-
-        # ------------------------------
-        # Start modal timer
-        # ------------------------------
-        wm = context.window_manager
-        self._timer = wm.event_timer_add(0.1, window=context.window)
-        wm.modal_handler_add(self)
-
-        return {'RUNNING_MODAL'}
-    # ------------------------------
-    
-    def modal(self, context, event):
-        obj = context.scene.current_paint_mesh
-        if event.type != 'TIMER':
-            return {'PASS_THROUGH'}
-
-        # Timeout guard
-        if time.time() - self.start_time > self.timeout:
-            self.report({'ERROR'}, "Texture fill timed out")
-            self._cleanup(context)
+        try:
+            target_faces = send_clear_request(context)
+        except RuntimeError as exc:
+            self.report({'ERROR'}, str(exc))
             return {'CANCELLED'}
 
-        while True:
-            try:
-                rec_message = ws_client.ws_chunks.get_nowait()
-            except Empty:
-                break
+        context.scene.target_faces.clear()
+        for face_index in target_faces:
+            entry = context.scene.target_faces.add()
+            entry.index = face_index
 
-            if not isinstance(rec_message, bytes):
-                continue
+        self.report({'INFO'}, "Clear request sent to server")
+        return {'FINISHED'}
 
-            msg = from_binary(rec_message)
-
-            if msg.get("chunk_total") is None:
-                continue
-
-            image_name = msg.get("name")
-            chunk_index = msg.get("chunk_index")
-            chunk_total = msg.get("chunk_total")
-            view_id = msg.get("view_id")
-            num_views = msg.get("num_views")
-            image_chunk = msg.get("image")
-
-            self.expected_views = num_views
-
-            print(f"[LOG] {image_name}: {chunk_index + 1} / {chunk_total}")
-
-            if view_id not in self.textures_meta:
-                self.textures_meta[view_id] = {}
-
-            if chunk_index not in self.textures_meta[view_id]:
-                self.textures_meta[view_id][chunk_index] = image_chunk
-
-            # View complete
-            if len(self.textures_meta[view_id]) == chunk_total:
-                ordered = [
-                    self.textures_meta[view_id][k]
-                    for k in sorted(self.textures_meta[view_id].keys())
-                ]
-                image = torch.cat(ordered)
-                if context.scene.update_texture_4k:
-                    image = image.reshape((4096, 4096, 4))
-                else:
-                    image = image.reshape((1024, 1024, 4))
-                image = image.cpu()
-                update_texture(obj, image, soft_merge=False)
-
-                self.num_completed_views += 1
-
-        # All views complete
-        if (
-            self.expected_views is not None
-            and self.num_completed_views >= self.expected_views
-        ):
-            self._cleanup(context)
-            self.report({'INFO'}, "[FILL TEXTURE] Completed all views")
-            return {'FINISHED'}
-
-        return {'RUNNING_MODAL'}
-
-
-    def _cleanup(self, context):
-        wm = context.window_manager
-        if self._timer:
-            wm.event_timer_remove(self._timer)
-        self._timer = None
-
-        
         
 class GLAZE_OT_Undo_Fill(bpy.types.Operator):
     """Undo Fill Operation, you can only consecutively undo twice"""
@@ -636,32 +489,9 @@ class GLAZE_OT_Undo_Fill(bpy.types.Operator):
         undo_texture()
         return {"FINISHED"}
         
-        
-class GLAZE_OT_SelectReferenceFace(bpy.types.Operator):
-    bl_idname = "glaze.select_reference_face"
-    bl_label = "Select Reference Face"
 
-    def execute(self, context):
-        obj = bpy.data.objects.get(REF_MESH_NAME)
-        context.scene.reference_faces.clear()
-        bm = bmesh.from_edit_mesh(obj.data)
-        bm.faces.ensure_lookup_table()
-        reference_faces = []
-        for f in bm.faces:
-            if f.select:
-                entry = context.scene.reference_faces.add()
-                entry.index = f.index
-                reference_faces.append(f.index)
-                self.report({'INFO'}, f"Adding {f.index} as a reference face")
-        face_info = {"reference_faces": reference_faces,
-                     "brush_name": context.scene.current_brush}
-        payload = {"type": "set_reference_face",
-                   "data": face_info}
-        ws_client.send(payload)
-        return {"FINISHED"}
-
-    
 class GLAZE_OT_show_brush_menu(bpy.types.Operator):
+    """Open the context menu for a brush library entry."""
     bl_idname = "glaze.show_brush_menu"
     bl_label = "Show Brush Menu"
 
@@ -727,89 +557,3 @@ class MATERIAL_OT_toggle_normal(bpy.types.Operator):
 
         return {'FINISHED'}
     
-    
-
-class GLAZE_OT_HUNYUAN(bpy.types.Operator):
-    bl_idname = "glaze.hunyuan"
-    bl_label = "Run Hunyuan Texturing"
-    bl_options = {'REGISTER', 'UNDO'} 
-    
-    def execute(self, context):  
-        time.sleep(30)
-        obj = context.scene.current_paint_mesh
-        view_id = context.scene.current_view.sv_id
-        info = {"view_id": view_id,
-                "mesh_name":base_name(context.scene.current_paint_mesh.name)}
-        message = {"type": "hunyuan",
-                "data": info}
-        
-        if ws_client.ws is None:
-            self.report({'ERROR'}, f"Server not connected")
-            return {'FINISHED'}
-        
-        ws_client.send(message)
-
-        self.start_time = time.time()
-        self.textures_meta = {}
-        self.num_completed_views = 0
-        self.expected_views = None
-        
-        while True:
-            try:
-                rec_message = ws_client.ws_chunks.get_nowait()
-            except Empty:
-                continue
-
-            if not isinstance(rec_message, bytes):
-                continue
-
-            msg = from_binary(rec_message)
-
-            if msg.get("chunk_total") is None:
-                continue
-
-            image_name = msg.get("name")
-            chunk_index = msg.get("chunk_index")
-            chunk_total = msg.get("chunk_total")
-            view_id = msg.get("view_id")
-            num_views = msg.get("num_views")
-            image_chunk = msg.get("image")
-
-            self.expected_views = num_views
-
-            print(f"[LOG] {image_name}: {chunk_index + 1} / {chunk_total}")
-
-            if view_id not in self.textures_meta:
-                self.textures_meta[view_id] = {}
-
-            if chunk_index not in self.textures_meta[view_id]:
-                self.textures_meta[view_id][chunk_index] = image_chunk
-
-            # View complete
-            if len(self.textures_meta[view_id]) == chunk_total:
-                ordered = [
-                    self.textures_meta[view_id][k]
-                    for k in sorted(self.textures_meta[view_id].keys())
-                ]
-                image = torch.cat(ordered)
-                if context.scene.update_texture_4k:
-                    image = image.reshape((4096, 4096, 3)) / 255.0
-                    image = image.cpu()
-                    image_full = torch.ones((4096, 4096, 4))
-                    image_full[:, :, :3] = image
-                else:
-                    image = image.reshape((1024, 1024, 3)) / 255.0
-                    image = image.cpu()
-                    image_full = torch.ones((1024, 1024, 4))
-                    image_full[:, :, :3] = image
-                update_texture(obj, image_full, soft_merge=False)
-
-                self.num_completed_views += 1
-
-                # All views complete
-                if (
-                    self.expected_views is not None
-                    and self.num_completed_views >= self.expected_views
-                ):
-                    self.report({'INFO'}, "[FILL TEXTURE] Completed all views")
-                    return {'FINISHED'}

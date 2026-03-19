@@ -20,12 +20,24 @@ def set_view_center(obj, area):
             break
         
 def base_name(name):
+    """Strip Blender numeric suffixes such as ``.001`` from an object name."""
     # Matches "thing", "thing.001", "thing.123", even "thing.something.001"
     m = re.match(r"^(.*?)(?:\.\d+)?$", name)
     return m.group(1)
 
 
 def load_mesh(mesh_path, name="GlazeMesh", remove_existing=False):
+    """Import an OBJ mesh, normalize it, rename it, and return the object.
+
+    Args:
+        mesh_path: Path to the OBJ file to import.
+        name: Name assigned to the imported mesh object.
+        remove_existing: When ``True``, removes an existing object with the same
+            target name before importing.
+
+    Raises:
+        FileNotFoundError: If ``mesh_path`` does not exist.
+    """
     
     mesh_path = Path(mesh_path)
     if not mesh_path.exists():
@@ -51,6 +63,12 @@ def load_mesh(mesh_path, name="GlazeMesh", remove_existing=False):
 
 
 def normalize_mesh(obj, normalize=True, eps=1e-6):
+    """Center a mesh at the origin and optionally scale it to unit bounds.
+
+    The mesh is edited in-place by entering Edit Mode, offsetting vertices by
+    the bounding-box midpoint, and dividing by the largest axis length when
+    ``normalize`` is enabled.
+    """
     bpy.ops.object.mode_set(mode='EDIT')
 
     # Get the BMesh from the object's mesh data
@@ -95,6 +113,7 @@ def normalize_mesh(obj, normalize=True, eps=1e-6):
 
 
 def duplicate_mesh(obj, new_name, location=(0,0,0)):
+    """Duplicate an object, its mesh data, and its materials."""
     obj_copy = obj.copy()
     obj_copy.data = obj.data.copy()  # separate mesh data
     obj_copy.name = new_name
@@ -143,6 +162,18 @@ def duplicate_image(orig_img, new_name):
     return new_img
 
 def apply_texture(obj, image_path, suffix=''):
+    """Create or load an image, then connect it to each material's Base Color.
+
+    Args:
+        obj: Mesh object whose materials should be updated.
+        image_path: Optional file path to load. When missing or invalid, a new
+            blank image is created at the scene's configured texture size.
+        suffix: Name suffix appended to the Blender image datablock.
+
+    Side Effects:
+        May create new Blender image datablocks, remove existing Base Color
+        image nodes, and attach new ``ShaderNodeTexImage`` nodes.
+    """
     # if image_path is None, create new node and set image path
     # if image_path exist but there is no prev bpy image, create one
     # if image_path exist and prev bpy image exist, replace the previous image
@@ -207,10 +238,12 @@ def apply_texture(obj, image_path, suffix=''):
 
 
 def get_current_texture(obj):
+    """Return the active paint texture image datablock for ``obj``."""
     return bpy.data.images.get(f"{obj.name}.paint.png")
     
 
 def clear_texture(obj):
+    """Fill the active paint texture for ``obj`` with transparent black."""
     current_texture = get_current_texture(obj)
     if not bpy.context.scene.update_texture_4k:
         h = w = 1024 #4096
@@ -222,6 +255,12 @@ def clear_texture(obj):
     current_texture.pixels.foreach_set(buffer)
 
 def update_texture(obj, texture: torch.Tensor, soft_merge=True):
+    """Merge a server-produced RGBA texture into the current paint texture.
+
+    The incoming tensor is resized to the active texture resolution, the
+    previous texture is copied into numbered history images, and the new content
+    is either alpha-blended or replaced depending on ``soft_merge``.
+    """
     # reshape texture to 4096 * 4096
     # use a soft margin composite with current mask
     print("updating texture...")
@@ -294,6 +333,7 @@ def update_texture(obj, texture: torch.Tensor, soft_merge=True):
 
 
 def get_last_texture_name(texture):
+    """Return the newest history image name for ``texture``, if one exists."""
     
     base = texture.name + " history"
     imgs = bpy.data.images
@@ -317,6 +357,13 @@ def get_last_texture_name(texture):
 
 
 def undo_texture():
+    """Restore the most recent saved texture history image.
+
+    Raises:
+        Exception: If the active material does not contain the expected
+            Principled BSDF and image texture setup, or if no history image is
+            available.
+    """
     # --- CONFIG ---
     material = bpy.context.object.active_material
 
@@ -369,6 +416,7 @@ def undo_texture():
 
 
 def replace_image(old_img, new_img):
+    """Delete ``old_img`` and rename ``new_img`` to the original image name."""
     old_name = old_img.name
     old_img.user_clear()
     if old_img.packed_file:
@@ -381,10 +429,10 @@ def replace_image(old_img, new_img):
         
 
 def keep_latest_six_history(current_tex):
-    """
-    Keep only the two most recent history textures for the given image.
-    History textures follow the format:
-        <image.name> history.NNN
+    """Keep at most six numbered history textures for ``current_tex``.
+
+    History textures follow the naming pattern ``<image.name> history.NNN``.
+    Older history images beyond the newest six are removed.
     """
     base = current_tex.name + " history"
     imgs = bpy.data.images
@@ -482,15 +530,16 @@ def disconnect_normal(mat):
 
 
 def expand_mask_soft(mask_arr, max_distance=20):
-    """
-    Expands a binary mask outward with a soft gradient.
-    
+    """Expand a 2D binary mask outward with an exponential falloff.
+
     Args:
-        mask (torch.Tensor): binary mask (0 or 1), in the shape of B C H W
-        max_distance (int): how far the soft gradient extends
-    
+        mask_arr: Binary NumPy array where non-zero pixels mark the filled
+            region.
+        max_distance: Maximum distance in pixels over which the soft mask fades.
+
     Returns:
-        torch.Tensor: non binary soft mask with values in [0,1], , in the shape of B C H W
+        numpy.ndarray: Floating-point mask in ``[0, 1]`` with the same height
+        and width as ``mask_arr``.
     """
     mask_arr = mask_arr.astype(np.uint8)
 
@@ -510,21 +559,21 @@ def expand_mask_soft(mask_arr, max_distance=20):
 def composite_inpaint(texture_existing, texture_inpaint,
                       mask_existing, mask_inpaint, mask_fill, 
                       soft=True, soft_margin=20):
-    """ 
-    Composite the existing texture map with inpaint texture over regions that mask_fill covers, 
-    Expand the mask_fill with soft margin if needed
-    
+    """Blend an inpainted texture into an existing texture using fill masks.
+
     Args:
-        texture_existing (_type_): existing texture map in B 4 H W, range(0,1)
-        texture_inpaint (_type_): inpaint texture map in B 4 H W, range(0,1)
-        mask_existing (_type_): binary mask of the existing texture (0 or 1), in the shape of B C H W
-        mask_inpaint (_type_): binary mask of the inpaint texture (0 or 1), in the shape of B C H W
-        mask_fill (_type_): binary mask to be filled (0 or 1), in the shape of B C H W
-        soft (bool, optional): _description_. Defaults to True.
-        soft_margin (int, optional): _description_. Defaults to 20.
+        texture_existing: Existing RGBA texture array in ``[0, 1]``.
+        texture_inpaint: New RGBA texture array in ``[0, 1]``.
+        mask_existing: Alpha or occupancy mask for existing pixels.
+        mask_inpaint: Mask for valid inpainted pixels.
+        mask_fill: Binary mask describing the region to fill.
+        soft: When ``True``, expands ``mask_fill`` with a soft falloff before
+            blending.
+        soft_margin: Distance passed to :func:`expand_mask_soft`.
 
     Returns:
-        _type_: updated texture map, range(0,1) for all channels
+        Updated RGBA texture array with the alpha channel recomputed from the
+        existing and filled regions.
     """
     
     if soft:
