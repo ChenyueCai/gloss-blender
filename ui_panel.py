@@ -71,13 +71,15 @@ class GLAZE_PT_Panel(bpy.types.Panel):
         tex_row = tex_box.row(align=True)
         tex_row.operator("glaze.load_paint_texture", text="Load Texture")
         tex_row.prop(session, "auto_sync_texture", text="Auto Sync")
+        tex_box.label(
+            text=f"Resolution: {'4K' if scene.update_texture_4k else '1K'} (from config)"
+        )
 
         gen_box = layout.box()
         gen_box.label(text="Generation", icon="BRUSH_DATA")
         top_row = gen_box.row(align=True)
         top_row.operator("glaze.fill", text="Generate Texture", icon="PLAY")
         top_row.operator("glaze.clear_texture", text="Clear Faces", icon="X")
-        top_row.prop(scene, "update_texture_4k")
 
         settings_row = gen_box.row(align=True)
         settings_row.prop(scene, "cam_dist")

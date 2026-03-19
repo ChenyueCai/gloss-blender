@@ -7,7 +7,9 @@ def load_glaze_config_from_yaml(yaml_path):
 
     Keys are copied onto ``bpy.context.scene.glaze_config`` when the property
     exists there. The legacy YAML key ``mesh_file_path`` is accepted as an alias
-    for ``mesh_folder``. Unknown keys are ignored and logged with ``print``.
+    for ``mesh_folder``. The runtime flag ``scene.update_texture_4k`` can also
+    be set from the YAML key ``update_texture_4k``. Unknown keys are ignored and
+    logged with ``print``.
 
     Args:
         yaml_path: Path to a YAML configuration file.
@@ -39,6 +41,20 @@ def load_glaze_config_from_yaml(yaml_path):
 
     # Iterate over all keys in YAML and set corresponding PropertyGroup attributes
     for key, value in data.items():
+        if key == "update_texture_4k":
+            requested_resolution = bool(value)
+            resolution_locked = (
+                scene.current_paint_mesh is not None
+                or bool(scene.glaze_session.loaded_paint_texture)
+            )
+            if resolution_locked and requested_resolution != scene.update_texture_4k:
+                print(
+                    "Warning: update_texture_4k is locked for the active session; "
+                    "keep the current value until a fresh start."
+                )
+                continue
+            scene.update_texture_4k = requested_resolution
+            continue
         target_key = aliases.get(key, key)
         if hasattr(cfg, target_key):
             setattr(cfg, target_key, value)

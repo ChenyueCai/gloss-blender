@@ -83,12 +83,18 @@ Reference image behavior:
 
 Generation settings:
 
-- `Paint on 4K Texture`
 - `Dist`
 - `Max Cam`
 - `Clip to Faces`
 - `Dilate`
 - `Soft Add`
+
+Texture resolution behavior:
+
+- `update_texture_4k` is loaded from the config file before painting starts.
+- Default behavior is `false`, which keeps the add-on in `1024 x 1024` mode.
+- Set `update_texture_4k: true` in the config file to use `4096 x 4096` textures.
+- The add-on shows this value in the UI but does not expose a live toggle during a session.
 
 Face selection behavior:
 
@@ -108,6 +114,7 @@ single_views_texture_folder: /path/to/reference/textures
 brushes_folder: /path/to/brushes
 preload_mode: test
 cache_folder: /path/to/cache
+update_texture_4k: false
 ```
 
 Notes:
@@ -202,7 +209,7 @@ async def main():
 asyncio.run(main())
 ```
 
-For the mock server, keep `Paint on 4K Texture` disabled so the returned `1024 x 1024 x 4` texture matches the add-on's expected size.
+For the mock server, keep `update_texture_4k: false` so the returned `1024 x 1024 x 4` texture matches the add-on's expected size.
 
 ## Development Notes
 

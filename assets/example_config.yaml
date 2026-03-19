@@ -6,3 +6,4 @@ single_views_texture_folder: /Users/chenyuecai/Desktop/workspace/GLOSS/assets/da
 brushes_folder: /Users/chenyuecai/Desktop/workspace/GLOSS/assets/data/brushes
 preload_mode: test
 cache_folder: /Users/chenyuecai/Desktop/workspace/GLOSS/assets/data/cache
+update_texture_4k: false
