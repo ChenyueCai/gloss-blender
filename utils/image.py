@@ -42,15 +42,15 @@ def get_preview(path):
 def get_brush_preview(path):
     """Load or reuse a preview icon for a brush icon image.
 
-    Brush previews are cached by the parent folder name so each brush keeps a
-    stable icon entry across UI redraws.
+    Brush previews are cached by full path so changing the brushes folder
+    loads the icon from the new location.
     """
     global brush_preview_collection
 
     if brush_preview_collection is None:
         brush_preview_collection = bpy.utils.previews.new()
 
-    name = path.split('/')[-2]
+    name = os.path.normpath(bpy.path.abspath(path))
 
     # Avoid caching stale previews
     if name in brush_preview_collection:
@@ -63,26 +63,3 @@ def get_brush_preview(path):
     except Exception as e:
         print("Preview load error:", e)
         return 0
-
-
-def get_single_view_files(self, context):
-    """Build EnumProperty items from ``glaze_config.single_views_folder``.
-
-    Returns:
-        list[tuple[str, str, str]]: File choices for Blender UI enums. When no
-        image files are available, returns a single ``("NONE", ...)`` fallback
-        entry.
-    """
-    folder = context.scene.glaze_config.single_views_folder
-    items = []
-
-    if folder and os.path.isdir(folder):
-        for f in sorted(os.listdir(folder)):
-            if f.lower().endswith((".png", ".jpg", ".jpeg")):
-                # (identifier, name, description)
-                items.append((f, f, f))
-    
-    if not items:
-        items.append(('NONE', 'No files found', ''))
-
-    return items

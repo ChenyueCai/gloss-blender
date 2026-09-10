@@ -3,7 +3,6 @@ import os
 import bpy.utils.previews
 from .backend import server_status_icon, server_status_text
 from .utils.image import get_preview, get_brush_preview
-from .utils.mesh import is_normal_connected
 
 
 class GLAZE_PT_Panel(bpy.types.Panel):
@@ -22,8 +21,8 @@ class GLAZE_PT_Panel(bpy.types.Panel):
         session = scene.glaze_session
 
         server_box = layout.box()
-        server_box.label(text="Server", icon="URL")
-        server_box.prop(scene.glaze_config, "server_url", text="")
+        server_box.label(text="Configuration", icon="PREFERENCES")
+        server_box.prop(scene.glaze_config, "server_url")
         status_row = server_box.row(align=True)
         status_row.label(text=server_status_text(), icon=server_status_icon())
         status_row.operator("glaze.reconnect_server", text="Reconnect", icon="FILE_REFRESH")
@@ -32,6 +31,19 @@ class GLAZE_PT_Panel(bpy.types.Panel):
         util_row.operator("glaze.load_config", text="Load Config", icon="FILE_FOLDER")
         util_row.operator("glaze.glaze_reload_addon", text="Reload Add-on", icon="FILE_REFRESH")
         util_row.operator("glaze.purge", text="Purge", icon="TRASH")
+
+        server_box.prop(scene.glaze_config, "mesh_folder")
+        server_box.prop(scene.glaze_config, "single_views_folder")
+        server_box.prop(scene.glaze_config, "single_views_texture_folder")
+        resolution_locked = (
+            scene.current_paint_mesh is not None
+            or bool(session.loaded_paint_texture)
+        )
+        resolution_row = server_box.row()
+        resolution_row.enabled = not resolution_locked
+        resolution_row.prop(scene, "update_texture_4k", text="Use 4K Texture")
+        if resolution_locked:
+            server_box.label(text="Resolution locked for this paint session", icon="LOCKED")
 
         asset_box = layout.box()
         asset_box.label(text="Assets", icon="MESH_DATA")
@@ -73,7 +85,7 @@ class GLAZE_PT_Panel(bpy.types.Panel):
         tex_row.operator("glaze.load_paint_texture", text="Load Texture")
         tex_row.prop(session, "auto_sync_texture", text="Auto Sync")
         tex_box.label(
-            text=f"Resolution: {'4K' if scene.update_texture_4k else '1K'} (from config)"
+            text=f"Resolution: {'4K' if scene.update_texture_4k else '1K'}"
         )
 
         gen_box = layout.box()
@@ -111,14 +123,6 @@ class GLAZE_PT_Panel(bpy.types.Panel):
         action_row.operator("glaze.set_texture", text="Sync to Server")
         action_row.operator("glaze.clear_all_texture", text="Clear All")
 
-        if context.object is not None:
-            mat = context.object.active_material
-            normal_row = gen_box.row(align=True)
-            normal_row.operator("material.toggle_normal_map",
-                        text=("Disconnect Normal" if mat and is_normal_connected(mat)
-                            else "Connect Normal"),
-                        icon="NORMALS_VERTEX")
-        
         brush_box = layout.box()
         header = brush_box.row(align=True)
         header.label(text="Brush Library", icon="BRUSHES_ALL")
@@ -137,7 +141,7 @@ class GLAZE_PT_Panel(bpy.types.Panel):
                 col = grid.box().column(align=True)
             else:
                 col = grid.column(align=True)
-            icon_path = os.path.join(context.scene.glaze_config.brushes_folder, f"{brush.name}", "icon.png")  
+            icon_path = os.path.join(bpy.path.abspath(scene.glaze_config.brushes_folder), brush.name, "icon.png")
             icon_id = get_brush_preview(icon_path)
             op = col.operator(
                 "glaze.show_brush_menu",

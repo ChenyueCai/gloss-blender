@@ -36,7 +36,8 @@ class GLAZE_OT_LoadReferenceMesh(bpy.types.Operator):
     bl_label = "Load Reference Mesh"
     bl_options = {'UNDO'}
 
-    filepath: bpy.props.StringProperty(subtype="FILE_PATH")
+    filepath: bpy.props.StringProperty(subtype="FILE_PATH", options={'SKIP_SAVE'})
+    directory: bpy.props.StringProperty(subtype="DIR_PATH", options={'HIDDEN', 'SKIP_SAVE'})
     filter_glob: bpy.props.StringProperty(default="*.obj;*.gltf;*.glb", options={'HIDDEN'})
 
     def execute(self, context):
@@ -57,6 +58,17 @@ class GLAZE_OT_LoadReferenceMesh(bpy.types.Operator):
         return {'FINISHED'}
 
     def invoke(self, context, event):
+        folder = context.scene.glaze_config.mesh_folder
+        if folder:
+            folder = os.path.abspath(bpy.path.abspath(os.path.expanduser(folder)))
+            if not os.path.isdir(folder):
+                self.report({'ERROR'}, f"Mesh folder does not exist: {folder}")
+                return {'CANCELLED'}
+            self.properties.property_unset("filepath")
+            self.directory = os.path.join(folder, "")
+        else:
+            self.properties.property_unset("filepath")
+            self.properties.property_unset("directory")
         context.window_manager.fileselect_add(self)
         return {'RUNNING_MODAL'}
 
@@ -67,7 +79,8 @@ class GLAZE_OT_LoadPaintMesh(bpy.types.Operator):
     bl_label = "Load Paint Mesh"
     bl_options = {'UNDO'}
 
-    filepath: bpy.props.StringProperty(subtype="FILE_PATH")
+    filepath: bpy.props.StringProperty(subtype="FILE_PATH", options={'SKIP_SAVE'})
+    directory: bpy.props.StringProperty(subtype="DIR_PATH", options={'HIDDEN', 'SKIP_SAVE'})
     filter_glob: bpy.props.StringProperty(default="*.obj;*.gltf;*.glb", options={'HIDDEN'})
 
     def execute(self, context):
@@ -93,6 +106,17 @@ class GLAZE_OT_LoadPaintMesh(bpy.types.Operator):
         return {'FINISHED'}
 
     def invoke(self, context, event):
+        folder = context.scene.glaze_config.mesh_folder
+        if folder:
+            folder = os.path.abspath(bpy.path.abspath(os.path.expanduser(folder)))
+            if not os.path.isdir(folder):
+                self.report({'ERROR'}, f"Mesh folder does not exist: {folder}")
+                return {'CANCELLED'}
+            self.properties.property_unset("filepath")
+            self.directory = os.path.join(folder, "")
+        else:
+            self.properties.property_unset("filepath")
+            self.properties.property_unset("directory")
         context.window_manager.fileselect_add(self)
         return {'RUNNING_MODAL'}
 
@@ -135,23 +159,27 @@ class GLAZE_OT_SetReference(bpy.types.Operator):
             self.report({'ERROR'}, "Choose a reference image first")
             return {'CANCELLED'}
 
-        curr_view.mesh = base_name(context.scene.current_reference_mesh.name)
-        texture_path = single_view_path
+        mesh_name = base_name(context.scene.current_reference_mesh.name)
+        texture_folder = context.scene.glaze_config.single_views_texture_folder
         match = re.match(r"view(\d+)\.", os.path.basename(single_view_path))
 
-        if match:
-            curr_view.sv_id = int(match.group(1))
-            single_view_texture_path = os.path.join(
-                context.scene.glaze_config.single_views_texture_folder,
-                curr_view.mesh[:-4],
-                f"view{curr_view.sv_id:04d}.png",
-            )
-            if os.path.exists(single_view_texture_path):
-                texture_path = single_view_texture_path
-        else:
-            curr_view.sv_id = -1
+        if not match or not texture_folder:
+            self.report({'ERROR'}, "requested texture does not exist")
+            return {'CANCELLED'}
+
+        sv_id = int(match.group(1))
+        texture_path = os.path.join(
+            bpy.path.abspath(texture_folder),
+            mesh_name[:-4],
+            f"view{sv_id:04d}.png",
+        )
+        if not os.path.isfile(texture_path):
+            self.report({'ERROR'}, "requested texture does not exist")
+            return {'CANCELLED'}
 
         apply_texture(context.scene.current_reference_mesh, texture_path, suffix='ref')
+        curr_view.mesh = mesh_name
+        curr_view.sv_id = sv_id
         self.report({'INFO'}, f"Applied reference image to {context.scene.current_reference_mesh.name}")
         return {'FINISHED'}
 
@@ -161,9 +189,22 @@ class GLAZE_OT_LoadReferenceView(bpy.types.Operator):
     bl_idname = "glaze.load_reference_view"
     bl_label = "Select Reference View"
 
-    filepath: bpy.props.StringProperty(subtype="FILE_PATH")
+    filepath: bpy.props.StringProperty(subtype="FILE_PATH", options={'SKIP_SAVE'})
+    directory: bpy.props.StringProperty(subtype="DIR_PATH", options={'HIDDEN', 'SKIP_SAVE'})
 
     def invoke(self, context, event):
+        folder = context.scene.glaze_config.single_views_folder
+        if folder:
+            folder = os.path.abspath(bpy.path.abspath(os.path.expanduser(folder)))
+            if not os.path.isdir(folder):
+                self.report({'ERROR'}, f"Reference images folder does not exist: {folder}")
+                return {'CANCELLED'}
+            # Blender prioritizes a set filepath over directory when opening the browser.
+            self.properties.property_unset("filepath")
+            self.directory = os.path.join(folder, "")
+        else:
+            self.properties.property_unset("filepath")
+            self.properties.property_unset("directory")
         context.window_manager.fileselect_add(self)
         return {'RUNNING_MODAL'}
 
@@ -235,7 +276,7 @@ def start_brush_listener(context, brush_name, brush_type, brush_sv_id):
             # save brush icon
             brush_icon = msg["brush icon"]
             brush_dir = os.path.join(
-                context.scene.glaze_config.brushes_folder,
+                bpy.path.abspath(context.scene.glaze_config.brushes_folder),
                 brush_name,
             )
             os.makedirs(brush_dir, exist_ok=True)
@@ -403,9 +444,10 @@ class GLAZE_OT_RefreshBrushLib(bpy.types.Operator):
     def execute(self, context):
         scene = context.scene
         folder = scene.glaze_config.brushes_folder
-        if not folder or not os.path.isdir(folder):
+        if not folder or not os.path.isdir(bpy.path.abspath(folder)):
             self.report({'ERROR'}, "Brushes folder is not set or does not exist")
             return {'CANCELLED'}
+        folder = bpy.path.abspath(folder)
 
         on_disk = set()
         for entry in os.listdir(folder):

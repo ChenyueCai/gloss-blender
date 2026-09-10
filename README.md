@@ -46,10 +46,12 @@ python -m pip install -r requirement.txt
 
 The add-on exposes three main sections in the `Glaze` sidebar panel.
 
-### 1. Server
+### 1. Configuration
 
 - Set the websocket URL.
 - Load a YAML config file.
+- Edit the loaded mesh, reference image, and reference texture folders directly in the panel. The brushes folder is configured through YAML and hidden from the panel.
+- Choose 1K or 4K texture resolution before loading a paint mesh.
 - Reconnect the websocket client.
 - Check the current connection status.
 
@@ -63,15 +65,18 @@ ws://localhost:10017/websocket
 
 - `Load Reference Mesh`: imports the mesh shown on the reference side.
 - `Load Paint Mesh`: imports the mesh that receives generated textures.
+- Both mesh file pickers start in the configured Mesh Folder (`mesh_folder`) when set. You can still browse elsewhere; a missing configured folder reports an error.
 - `Choose Reference Image`: selects a reference image from disk.
+- The reference image file picker starts in the configured Reference Images folder (`single_views_folder`) when set. You can still browse to another folder.
 - `Apply to Reference Mesh`: applies the selected reference image.
 - `Load Texture`: loads a paint texture onto the paint mesh.
 - `Auto Sync`: immediately uploads the loaded paint texture to the server.
 
 Reference image behavior:
 
-- If the file name matches `view####.png`, the add-on tries to resolve the corresponding texture inside `single_views_texture_folder/<mesh>/`.
-- Otherwise it uses the selected file directly.
+- The selected file name must start with `view<number>.`, such as `view0001.png` or `view0001.basecolor.png`.
+- The add-on always loads `single_views_texture_folder/<mesh>/view####.png` for that view ID. It does not use the selected image directly.
+- If the view ID cannot be resolved, the texture folder is unset, or the requested texture file is missing, it reports `requested texture does not exist` and cancels.
 
 ### 3. Generation
 
@@ -91,10 +96,10 @@ Generation settings:
 
 Texture resolution behavior:
 
-- `update_texture_4k` is loaded from the config file before painting starts.
-- Default behavior is `false`, which keeps the add-on in `1024 x 1024` mode.
-- Set `update_texture_4k: true` in the config file to use `4096 x 4096` textures.
-- The add-on shows this value in the UI but does not expose a live toggle during a session.
+- `update_texture_4k` can be loaded from config or edited in the Configuration section before painting starts.
+- Default behavior is `true`, which uses `4096 x 4096` textures.
+- Set `update_texture_4k: false` in the config file or disable Use 4K Texture before loading a paint mesh to use `1024 x 1024` textures.
+- The toggle is disabled once a paint mesh or paint texture is loaded, matching the config loader's session lock.
 
 Face selection behavior:
 
@@ -109,19 +114,19 @@ Example config:
 server_url: ws://localhost:10017/websocket
 mesh_folder: /path/to/meshes
 single_views_folder: /path/to/reference/images
-single_views_cam_folder: /path/to/camera/metadata
 single_views_texture_folder: /path/to/reference/textures
 brushes_folder: /path/to/brushes
-preload_mode: test
-cache_folder: /path/to/cache
-update_texture_4k: false
+update_texture_4k: true
 ```
 
 Notes:
 
-- The loader accepts the legacy key `mesh_file_path`, but `mesh_folder` is the current property name.
+- Panel edits update the scene settings; they do not rewrite the YAML file. Reference texture lookup and brush icon reads/writes use the current folder values. Click the Brush Library refresh button to rescan a changed brushes folder.
+- Folder fields support absolute paths and Blender's `//` paths relative to the blend file.
+- After editing the server URL, click Reconnect to switch the active connection.
+- The legacy config key `mesh_file_path` is accepted as an alias for `mesh_folder`.
+- Unused entries (`single_views_cam_folder`, `preload_mode`, and `cache_folder`) have been removed. Older YAML files containing them still load; these keys are ignored.
 - The server implementation is not included in this repository.
-- Camera metadata is referenced by config, but this add-on currently does not parse camera files locally.
 
 ## Websocket Protocol
 
@@ -132,7 +137,7 @@ JSON messages:
 ```json
 {"type": "add_ref_mesh", "data": {"mesh_name": "chair"}}
 {"type": "add_pnt_mesh", "data": {"mesh_name": "chair", "paint_mesh_name": "chair_pnt", "high_res": false}}
-{"type": "fill", "data": {"target_faces": [0, 1], "mesh_name": "chair_pnt", "brush_name": "MyBrush", "high_res": false, "update": true, "max_cameras": 5, "cam_dist": 0.75, "dilate": true}}
+{"type": "fill", "data": {"target_faces": [0, 1], "mesh_name": "chair_pnt", "brush_name": "MyBrush", "high_res": false, "max_cameras": 3, "cam_dist": 0.75, "cam_fov": 0.4, "dilate": true}}
 {"type": "clear_face", "data": {"target_faces": [0, 1], "mesh_name": "chair_pnt"}}
 {"type": "clear_all_texture", "data": {"paint_mesh_name": "chair_pnt"}}
 ```

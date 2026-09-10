@@ -5,11 +5,10 @@ import os
 def load_glaze_config_from_yaml(yaml_path):
     """Load scene Glaze configuration values from a YAML file.
 
-    Keys are copied onto ``bpy.context.scene.glaze_config`` when the property
-    exists there. The legacy YAML key ``mesh_file_path`` is accepted as an alias
-    for ``mesh_folder``. The runtime flag ``scene.update_texture_4k`` can also
-    be set from the YAML key ``update_texture_4k``. Unknown keys are ignored and
-    logged with ``print``.
+    Loads the server URL, mesh folder, reference image and texture folders,
+    brushes folder, and ``scene.update_texture_4k``. The legacy key
+    ``mesh_file_path`` is accepted as ``mesh_folder``. Unknown keys are ignored and
+    logged with ``print``. Resolution stays locked during a paint session.
 
     Args:
         yaml_path: Path to a YAML configuration file.
@@ -35,9 +34,6 @@ def load_glaze_config_from_yaml(yaml_path):
         raise RuntimeError("Scene.glaze_config is not registered")
 
     cfg = scene.glaze_config
-    aliases = {
-        "mesh_file_path": "mesh_folder",
-    }
 
     # Iterate over all keys in YAML and set corresponding PropertyGroup attributes
     for key, value in data.items():
@@ -55,8 +51,8 @@ def load_glaze_config_from_yaml(yaml_path):
                 continue
             scene.update_texture_4k = requested_resolution
             continue
-        target_key = aliases.get(key, key)
-        if hasattr(cfg, target_key):
+        target_key = "mesh_folder" if key == "mesh_file_path" else key
+        if target_key in {"server_url", "mesh_folder", "single_views_folder", "single_views_texture_folder", "brushes_folder"}:
             setattr(cfg, target_key, value)
         else:
             print(f"Warning: GlazeConfig has no property named '{key}'")

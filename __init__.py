@@ -119,7 +119,7 @@ def register():
     bpy.types.Scene.update_texture_4k = bpy.props.BoolProperty(
         name="Paint on 4K Texture",
         description="Toggle between 4K texture or lower resolution",
-        default=False,
+        default=True,
     )
     bpy.types.Scene.clip_fill_to_faces = bpy.props.BoolProperty(
         name="Clip to Faces",
@@ -156,7 +156,7 @@ def register():
     bpy.types.Scene.max_cameras = bpy.props.IntProperty(
         name="Max Cam",
         description="Max fill patches to use",
-        default=5,
+        default=3,
         min=1,  # Hard minimum value
         max=200  # Hard maximum value
     )
@@ -182,14 +182,14 @@ def register():
     bpy.types.Scene.cam_fov = bpy.props.FloatProperty(
         name="FOV",
         description="Fill camera field of view in radians",
-        default=1.0472,
+        default=0.4,
         min=0.1,
         max=3.0,
     )
     bpy.types.Scene.brush_cam_fov = bpy.props.FloatProperty(
         name="Brush FOV",
         description="Camera field of view in radians baked into a new brush at creation time",
-        default=1.0472,
+        default=0.4,
         min=0.1,
         max=3.0,
     )
