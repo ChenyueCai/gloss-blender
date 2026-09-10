@@ -58,8 +58,41 @@ class GlazeSessionState(bpy.types.PropertyGroup):
         subtype='FILE_PATH',
         default="",
     )
-    auto_sync_texture: bpy.props.BoolProperty(
-        name="Auto Sync Texture",
-        description="Push a newly loaded paint texture to the server immediately",
-        default=True,
+
+    # Progress mirrors for long-running server work. Written by the router
+    # handlers in backend.py; read by ui_panel.py so the panel shows what is
+    # happening instead of appearing frozen.
+    fill_state: bpy.props.EnumProperty(
+        name="Fill State",
+        items=[
+            ('idle', "Idle", "No fill in flight"),
+            ('preparing', "Working", "Server is generating a texture"),
+            ('ready', "Ready", "Last fill completed"),
+            ('error', "Error", "Last fill failed"),
+        ],
+        default='idle',
     )
+    fill_message: bpy.props.StringProperty(name="Fill Message", default="")
+    brush_state: bpy.props.EnumProperty(
+        name="Brush State",
+        items=[
+            ('idle', "Idle", "No brush being created"),
+            ('preparing', "Working", "Server is preparing a brush"),
+            ('ready', "Ready", "Last brush completed"),
+            ('error', "Error", "Last brush failed"),
+        ],
+        default='idle',
+    )
+    brush_message: bpy.props.StringProperty(name="Brush Message", default="")
+    sync_state: bpy.props.EnumProperty(
+        name="Sync State",
+        description="Whether the server holds the same texture as Blender",
+        items=[
+            ('idle', "Idle", "Nothing painted yet"),
+            ('syncing', "Syncing", "Pushing the texture to the server"),
+            ('synced', "Synced", "Server holds the same texture"),
+            ('error', "Error", "Server copy may be stale"),
+        ],
+        default='idle',
+    )
+    sync_message: bpy.props.StringProperty(name="Sync Message", default="")

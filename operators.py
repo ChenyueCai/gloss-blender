@@ -1,17 +1,27 @@
 import bpy
 import bmesh
 
-from .backend import clear_all_texture, collect_selected_face_indices, load_paint_texture, purge_duplicates, send_clear_request, send_fill_request, send_precompute_local_cameras_request, sync_paint_texture
+from .backend import clear_all_texture, collect_selected_face_indices, load_paint_texture, purge_duplicates, send_clear_request, send_fill_request
 from .utils.config import load_glaze_config_from_yaml
 from .utils.mesh import load_mesh, apply_texture, undo_texture, \
     is_normal_connected, disconnect_normal, connect_normal, set_view_center, base_name, \
     strip_to_diffuse_normal
-from .utils.io import from_binary
+from .utils.io import decode_pixels, from_binary
 from .client import ws_client
+from .protocol import (
+    DTYPE_UINT8,
+    MSG_BRUSH_ICON,
+    STATE_ERROR,
+    STATE_PREPARING,
+    STATE_READY,
+)
+from .backend import push_texture_to_server, set_brush_state, tag_redraw_all
 
 import os
 import re
-import torchvision
+import time
+
+import numpy as np
 
 
 def _mesh_stem_from_path(filepath):
@@ -226,11 +236,7 @@ class GLAZE_OT_LoadPaintTexture(bpy.types.Operator):
 
     def execute(self, context):
         try:
-            load_paint_texture(
-                context,
-                self.filepath,
-                sync_to_server=context.scene.glaze_session.auto_sync_texture,
-            )
+            load_paint_texture(context, self.filepath)
         except RuntimeError as exc:
             self.report({'ERROR'}, str(exc))
             return {'CANCELLED'}
@@ -260,41 +266,109 @@ def brush_exists(scene, name):
     return False
 
 
+#: Seconds to wait for a brush icon before declaring the request failed.
+BRUSH_TIMEOUT_S = 300
+
+#: brush_name -> deadline, for brushes whose icon has not arrived yet.
+_PENDING_BRUSHES = {}
+
+
+def write_icon_png(pixels, filepath):
+    """Write an HxWx{3,4} array of ``[0, 1]`` floats to ``filepath`` as PNG.
+
+    Uses Blender's own image API rather than torchvision: this runs on the UI
+    thread, and importing/calling torchvision cost far more than writing a
+    thumbnail. Blender's pixel buffer is bottom-up, hence the flip.
+    """
+    height, width = pixels.shape[0], pixels.shape[1]
+    if pixels.shape[2] == 3:
+        alpha = np.ones((height, width, 1), dtype=np.float32)
+        pixels = np.concatenate([pixels, alpha], axis=2)
+
+    image = bpy.data.images.new(
+        name=os.path.basename(filepath), width=width, height=height, alpha=True
+    )
+    try:
+        image.pixels.foreach_set(np.flipud(pixels).astype(np.float32).ravel())
+        image.filepath_raw = filepath
+        image.file_format = "PNG"
+        image.save()
+    finally:
+        bpy.data.images.remove(image)
+
+
+def _finish_brush(context, brush_name, brush_type, brush_sv_id):
+    """Register a completed brush in the scene collection."""
+    if brush_exists(context.scene, brush_name):
+        return
+    brush = context.scene.glaze_brushes.add()
+    brush.name = brush_name
+    brush.sv_id = brush_sv_id
+    brush.brush_type = brush_type
+
+
 def start_brush_listener(context, brush_name, brush_type, brush_sv_id):
-    """Poll for a generated brush icon and register the brush when it arrives.
+    """Route the icon for ``brush_name`` to disk and register the brush.
+
+    Replaces a polling timer that competed with the status poller for a shared
+    inbox and dropped icons. This registers a handler on the router instead, so
+    the icon reaches exactly one consumer, and arms a deadline so a lost reply
+    surfaces as an error rather than polling forever.
 
     Side Effects:
-        Creates the brush icon directory on disk, writes ``icon.png``, appends a
-        brush entry to ``scene.glaze_brushes``, and registers a Blender timer.
+        Creates the brush icon directory, writes ``icon.png``, appends to
+        ``scene.glaze_brushes``, and registers a router handler plus a timer.
     """
-    def _poll():
-        rec_message = ws_client.poll_bin_messages()
-        if rec_message is None:
-            return 0.1  # keep polling
-        msg = from_binary(rec_message)
-        if msg.get("brush icon") is not None:
-            # save brush icon
-            brush_icon = msg["brush icon"]
+    _PENDING_BRUSHES[brush_name] = time.time() + BRUSH_TIMEOUT_S
+
+    def _on_icon(payload):
+        # A payload naming a different brush belongs to another request.
+        payload_name = payload.get("brush_name")
+        if payload_name is not None and payload_name != brush_name:
+            return
+
+        icon = payload.get("image")
+        if icon is None:
+            icon = payload.get("brush icon")  # legacy untagged server
+        if icon is None:
+            return
+
+        ws_client.unregister_handler(MSG_BRUSH_ICON, _on_icon)
+        _PENDING_BRUSHES.pop(brush_name, None)
+
+        try:
+            pixels = decode_pixels(icon, payload.get("dtype", DTYPE_UINT8))
             brush_dir = os.path.join(
                 bpy.path.abspath(context.scene.glaze_config.brushes_folder),
                 brush_name,
             )
             os.makedirs(brush_dir, exist_ok=True)
-            torchvision.utils.save_image(
-                brush_icon.permute(2, 0, 1),
-                os.path.join(brush_dir, "icon.png"),
-            )
-            # add brush to the scene
-            brush = context.scene.glaze_brushes.add()
-            brush.name = brush_name
-            brush.sv_id = brush_sv_id
-            brush.brush_type = brush_type
+            write_icon_png(np.asarray(pixels), os.path.join(brush_dir, "icon.png"))
+            _finish_brush(context, brush_name, brush_type, brush_sv_id)
+            set_brush_state(STATE_READY, f"brush ready: {brush_name}")
             print(f"[CREATE BRUSH] done creating brush: {brush_name}")
-            return None  # stop timer
-        return 0.1  # keep polling
-    bpy.app.timers.register(_poll)
+        except Exception as exc:
+            set_brush_state(STATE_ERROR, f"{brush_name}: {exc}")
+            print(f"[CREATE BRUSH] failed to store icon for {brush_name}: {exc}")
 
-   
+    ws_client.register_handler(MSG_BRUSH_ICON, _on_icon)
+
+    def _deadline():
+        deadline = _PENDING_BRUSHES.get(brush_name)
+        if deadline is None:
+            return None  # icon arrived; the handler already cleaned up
+        if time.time() < deadline:
+            return 1.0
+        _PENDING_BRUSHES.pop(brush_name, None)
+        ws_client.unregister_handler(MSG_BRUSH_ICON, _on_icon)
+        set_brush_state(STATE_ERROR, f"timed out creating {brush_name}")
+        print(f"[CREATE BRUSH] timed out waiting for icon: {brush_name}")
+        return None
+
+    bpy.app.timers.register(_deadline)
+    set_brush_state(STATE_PREPARING, f"creating brush: {brush_name}")
+
+
 class GLAZE_OT_create_auto_brushes(bpy.types.Operator):
     """Create New Auto Type Brush"""
     bl_idname = "glaze.create_auto_brush"
@@ -560,43 +634,6 @@ class GLAZE_OT_ShowFaceIds(bpy.types.Operator):
         return {'FINISHED'}
 
 
-class GLAZE_OT_PrecomputeLocalCameras(bpy.types.Operator):
-    """Send a precompute-local-cameras request for the selected faces."""
-    bl_idname = "glaze.precompute_local_cameras"
-    bl_label = "Precompute Local Cameras"
-    bl_options = {'REGISTER'}
-
-    def execute(self, context):
-        try:
-            target_faces = send_precompute_local_cameras_request(context)
-        except RuntimeError as exc:
-            self.report({'ERROR'}, str(exc))
-            return {'CANCELLED'}
-
-        if not target_faces:
-            self.report({'WARNING'}, "No faces selected; sent empty precompute request")
-        else:
-            self.report({'INFO'}, f"Precompute local cameras request sent ({len(target_faces)} faces)")
-        return {'FINISHED'}
-
-
-class GLAZE_OT_SetPaintTexture(bpy.types.Operator):
-    """Push the active paint texture to the server."""
-    bl_idname = "glaze.set_texture"
-    bl_label = "Sync Texture with server"
-    bl_options = {'REGISTER', 'UNDO'} 
-    
-    def execute(self, context):
-        try:
-            sync_paint_texture(context)
-        except RuntimeError as exc:
-            self.report({'ERROR'}, str(exc))
-            return {'CANCELLED'}
-
-        self.report({'INFO'}, "Paint texture sync queued")
-        return {"FINISHED"}
-
-
 class GLAZE_OT_ClearAllPaintTexture(bpy.types.Operator):
     """Clear the entire active paint texture."""
     bl_idname = "glaze.clear_all_texture"
@@ -643,7 +680,21 @@ class GLAZE_OT_Undo_Fill(bpy.types.Operator):
     bl_options = {'REGISTER', 'UNDO'} 
     
     def execute(self, context):
-        undo_texture()
+        try:
+            undo_texture()
+        except Exception as exc:
+            self.report({'ERROR'}, str(exc))
+            return {'CANCELLED'}
+
+        # The server keeps no history of its own, so the restored texture is
+        # pushed to it. Without this the server would keep conditioning the
+        # next stroke on the state the user just undid.
+        if not push_texture_to_server(context, reason="after undo"):
+            self.report({'WARNING'},
+                        "Undone locally, but the server copy is now stale")
+            return {'FINISHED'}
+
+        self.report({'INFO'}, "Undone and synced to server")
         return {"FINISHED"}
         
 

@@ -35,6 +35,7 @@ importlib.reload(brush)
 
 
 from .client import register_client, unregister_client
+from .backend import register_backend_handlers, unregister_backend_handlers
 from .ui_panel import *
 from .operators import *
 from .properties import *
@@ -160,25 +161,6 @@ def register():
         min=1,  # Hard minimum value
         max=200  # Hard maximum value
     )
-    bpy.types.Scene.fill_camera_mode = bpy.props.EnumProperty(
-        name="Camera Mode",
-        description="How fill cameras are chosen",
-        items=[
-            ('AUTO', "Auto", "Server picks cameras automatically"),
-            ('CAMERA', "Camera", "Use manually entered anchor face IDs"),
-        ],
-        default='AUTO',
-    )
-    bpy.types.Scene.fill_anchor_face_ids = bpy.props.StringProperty(
-        name="Anchor Face IDs",
-        description="Comma-separated face indices used as camera anchors (e.g. 1, 20, 555)",
-        default="",
-    )
-    bpy.types.Scene.use_local_camera = bpy.props.BoolProperty(
-        name="Use Local Camera",
-        description="Use precomputed local cameras for the fill request",
-        default=False,
-    )
     bpy.types.Scene.cam_fov = bpy.props.FloatProperty(
         name="FOV",
         description="Fill camera field of view in radians",
@@ -194,9 +176,11 @@ def register():
         max=3.0,
     )
     register_client()
+    register_backend_handlers()
     
 def unregister():
     """Unregister the add-on classes, scene properties, overlay, and client."""
+    unregister_backend_handlers()
     unregister_client()
     for h in handlers:
         bpy.types.SpaceView3D.draw_handler_remove(h, 'WINDOW')
@@ -220,9 +204,6 @@ def unregister():
     del bpy.types.Scene.cam_dist
     del bpy.types.Scene.brush_cam_dist
     del bpy.types.Scene.max_cameras
-    del bpy.types.Scene.fill_camera_mode
-    del bpy.types.Scene.fill_anchor_face_ids
-    del bpy.types.Scene.use_local_camera
     del bpy.types.Scene.cam_fov
     del bpy.types.Scene.brush_cam_fov
     for cls in reversed(classes):

@@ -442,29 +442,155 @@ def split_tensor(tensor, max_chunk_bytes=1_000_000):
 
     return chunks
 
-def send_large_image(name: str, task_name: str, image: np.ndarray, chunk_size: int = 10_000_000):
+#: Default chunk budget in bytes for splitting large pixel payloads.
+#: MUST match ``protocol.DEFAULT_CHUNK_BYTES`` and the server's copy of this
+#: module. These silently disagreed (1 MB server vs 10 MB client) before this
+#: constant existed, which split a 4K texture into ~269 frames instead of 27.
+DEFAULT_CHUNK_BYTES = 10_000_000
+
+#: Wire dtype tags for pixel payloads.
+DTYPE_UINT8 = "uint8"
+DTYPE_FLOAT32 = "float32"
+
+
+def encode_pixels(image, dtype=DTYPE_UINT8):
+    """Quantize a ``[0, 1]`` pixel array for transport.
+
+    ``uint8`` is 4x smaller than ``float32`` and lossless for 8-bit basecolor
+    data, which is what both sides ultimately store. ``float32`` is kept as an
+    escape hatch for callers that need the extra range.
+
+    Args:
+        image: NumPy array or torch tensor of pixels, nominally in ``[0, 1]``.
+        dtype: One of ``DTYPE_UINT8`` / ``DTYPE_FLOAT32``.
+
+    Returns:
+        tuple[np.ndarray, str]: The array to put on the wire and its dtype tag.
+    """
+    if isinstance(image, torch.Tensor):
+        image = image.detach().cpu().numpy()
+    image = np.asarray(image)
+    if dtype == DTYPE_UINT8:
+        scaled = np.clip(image, 0.0, 1.0) * 255.0
+        return np.round(scaled).astype(np.uint8), DTYPE_UINT8
+    return image.astype(np.float32), DTYPE_FLOAT32
+
+
+def decode_pixels(image, dtype=DTYPE_FLOAT32):
+    """Inverse of :func:`encode_pixels`; always returns ``float32`` in ``[0, 1]``.
+
+    Example:
+        >>> a = np.linspace(0, 1, 16, dtype=np.float32)
+        >>> enc, tag = encode_pixels(a)
+        >>> bool(np.abs(decode_pixels(enc, tag) - a).max() <= 1 / 255)
+        True
+    """
+    if isinstance(image, torch.Tensor):
+        image = image.detach().cpu().numpy()
+    image = np.asarray(image)
+    if dtype == DTYPE_UINT8 or image.dtype == np.uint8:
+        return image.astype(np.float32) / 255.0
+    return image.astype(np.float32)
+
+
+def send_large_image(name: str, task_name: str, image, chunk_size: int = DEFAULT_CHUNK_BYTES,
+                     msg_type: str = "image", dtype: str = DTYPE_UINT8, extra: dict = None):
     """Package an image array into chunked websocket message dictionaries.
 
     Args:
         name: Logical image name included in each chunk message.
         task_name: Server task identifier stored in each message.
-        image: Flat or shaped NumPy array containing image data.
+        image: Flat or shaped array of pixels in ``[0, 1]``.
         chunk_size: Maximum chunk size in bytes before the tensor is split.
+        msg_type: Routing tag written into every chunk's ``type`` field.
+        dtype: Wire dtype; see :func:`encode_pixels`.
+        extra: Additional key/values copied into every chunk message.
 
     Returns:
         list[dict]: Binary-ready message payloads containing tensor chunks.
     """
-    chunks = split_tensor(torch.from_numpy(image), max_chunk_bytes=chunk_size)
+    payload, dtype_tag = encode_pixels(image, dtype=dtype)
+    chunks = split_tensor(torch.from_numpy(payload), max_chunk_bytes=chunk_size)
     total_chunks = len(chunks)
     msgs = []
     for idx in range(total_chunks):
         chunk = chunks[idx]
-        msgs.append({
-            "type": "image",
+        msg = {
+            "type": msg_type,
             "name": name,
             "task_name": task_name,
             "chunk_index": idx,
             "chunk_total": total_chunks,
+            "dtype": dtype_tag,
             "image": chunk,
-        })
+        }
+        if extra:
+            msg.update(extra)
+        msgs.append(msg)
     return msgs  # your binary-packer function
+
+
+class ChunkAssembler:
+    """Reassemble chunked pixel payloads, keyed by view id.
+
+    Kept free of Blender imports so the reassembly contract can be tested
+    directly. ``add`` returns ``None`` until a view's chunks are all present,
+    then returns the decoded ``float32`` array for that view exactly once.
+
+    Example:
+        >>> msgs = send_large_image("t", "task", np.zeros(8, dtype=np.float32))
+        >>> a = ChunkAssembler()
+        >>> out = [a.add(dict(m, view_id=0, num_views=1)) for m in msgs]
+        >>> out[-1][0]
+        0
+    """
+
+    def __init__(self):
+        self._views = {}
+        self.num_views = None
+
+    def progress(self, view_id):
+        """Return ``(received, expected)`` chunk counts for ``view_id``."""
+        meta = self._views.get(view_id)
+        if not meta:
+            return 0, 0
+        return len(meta["chunks"]), meta["chunk_total"]
+
+    def add(self, payload):
+        """Absorb one chunk message.
+
+        Returns:
+            tuple[int, np.ndarray] | None: ``(view_id, pixels)`` once the view
+            is complete, otherwise ``None``. Duplicate chunks are ignored.
+        """
+        if payload.get("chunk_total") is None:
+            return None
+
+        view_id = payload["view_id"]
+        chunk_index = payload["chunk_index"]
+        chunk_total = payload["chunk_total"]
+        self.num_views = payload.get("num_views", self.num_views)
+
+        meta = self._views.setdefault(
+            view_id,
+            {"chunks": {}, "chunk_total": chunk_total,
+             "dtype": payload.get("dtype", DTYPE_FLOAT32)},
+        )
+        if chunk_index in meta["chunks"]:
+            return None
+        meta["chunks"][chunk_index] = payload["image"]
+
+        if len(meta["chunks"]) < chunk_total:
+            return None
+
+        ordered = [meta["chunks"][i] for i in sorted(meta["chunks"])]
+        joined = ordered[0] if len(ordered) == 1 else torch.cat(
+            [torch.as_tensor(c).reshape(-1) for c in ordered]
+        )
+        del self._views[view_id]
+        return view_id, decode_pixels(joined, meta["dtype"])
+
+    def reset(self):
+        """Drop all partially-received views."""
+        self._views.clear()
+        self.num_views = None

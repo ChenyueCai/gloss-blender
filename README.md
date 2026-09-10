@@ -14,12 +14,15 @@
 ## Repository Layout
 
 - `__init__.py`: add-on registration and Blender scene properties.
-- `ui_panel.py`: panel layout and user-facing workflow.
+- `protocol.py`: wire-protocol constants shared with the server.
+- `ui_panel.py`: panel layout, progress rows, and user-facing workflow.
 - `operators.py`: Blender operators for loading assets, generation, syncing, and brush actions.
-- `backend.py`: backend-facing request helpers and streamed texture update handling.
-- `client.py`: websocket client and reconnect logic.
+- `backend.py`: request builders and the routed handlers that apply server results.
+- `client.py`: websocket client, reconnect logic, and the message router.
 - `utils/mesh.py`: mesh import, texture application, and texture update utilities.
-- `utils/io.py`: binary encoding helpers used for large texture payloads.
+- `utils/io.py`: binary encoding, the pixel codec, and chunk reassembly.
+- `mock_server.py`: reference server implementation for testing without a GPU.
+- `tests/`: headless test suite (Blender is stubbed).
 - `assets/example_config.yaml`: sample config file.
 
 ## Requirements
@@ -69,8 +72,9 @@ ws://localhost:10017/websocket
 - `Choose Reference Image`: selects a reference image from disk.
 - The reference image file picker starts in the configured Reference Images folder (`single_views_folder`) when set. You can still browse to another folder.
 - `Apply to Reference Mesh`: applies the selected reference image.
-- `Load Texture`: loads a paint texture onto the paint mesh.
-- `Auto Sync`: immediately uploads the loaded paint texture to the server.
+- `Load Texture`: loads a paint texture onto the paint mesh and uploads it to
+  the server. There is no toggle: client and server always hold the same
+  pixels.
 
 Reference image behavior:
 
@@ -80,19 +84,33 @@ Reference image behavior:
 
 ### 3. Generation
 
-- `Generate Texture`: sends the current paint request to the server.
+- `Generate Texture`: sends the current paint request to the server, then
+  uploads the composited result back so both sides agree.
 - `Clear Faces`: asks the server to clear selected regions.
-- `Sync to Server`: uploads the current Blender texture to the server.
-- `Clear All`: clears the local paint texture and notifies the server.
-- `Undo`: restores the previous texture history snapshot.
+- `Clear All`: clears the paint texture on both sides.
+- `Undo`: restores the previous texture snapshot and rolls the server back to
+  the same pixels.
+
+There is deliberately no manual sync button. See
+[Texture agreement](#texture-agreement).
 
 Generation settings:
 
-- `Dist`
-- `Max Cam`
+- `Dist` — how far each candidate camera sits from the surface it is anchored to.
+- `Max Cam` — upper bound on how many cameras a single fill uses.
 - `Clip to Faces`
 - `Dilate`
 - `Soft Add`
+
+Camera selection behavior:
+
+- The server places one candidate camera on each selected face, looking down
+  that face's normal at `Dist`.
+- It then picks greedily: the camera covering the most selected texture area
+  wins, the area it covered is subtracted, and each next camera is the one
+  covering the most of what is still uncovered.
+- Selection stops at `Max Cam`, or earlier when no remaining camera would add
+  any new area. There are no camera modes to choose between.
 
 Texture resolution behavior:
 
@@ -130,100 +148,112 @@ Notes:
 
 ## Websocket Protocol
 
-The add-on currently sends two kinds of payloads.
+Full details in [`MESSAGING.md`](./MESSAGING.md). In short:
 
-JSON messages:
+- Every message, in both directions, is tagged: `{"type": ..., "data": {...}}`
+  for JSON, and a `type` key inside the binary payload for pixel data.
+- The client routes each incoming message to a registered handler
+  (`ws_client.register_handler(msg_type, fn)`); there is exactly one consumer
+  per type.
+- Pixel payloads travel as **uint8** (tagged `dtype`) in chunks of at most
+  10 MB. A 4K RGBA texture is 7 frames / 67 MB, down from 269 frames / 268 MB.
+
+Requests the add-on sends:
 
 ```json
 {"type": "add_ref_mesh", "data": {"mesh_name": "chair"}}
 {"type": "add_pnt_mesh", "data": {"mesh_name": "chair", "paint_mesh_name": "chair_pnt", "high_res": false}}
-{"type": "fill", "data": {"target_faces": [0, 1], "mesh_name": "chair_pnt", "brush_name": "MyBrush", "high_res": false, "max_cameras": 3, "cam_dist": 0.75, "cam_fov": 0.4, "dilate": true}}
-{"type": "clear_face", "data": {"target_faces": [0, 1], "mesh_name": "chair_pnt"}}
+{"type": "add_brush", "data": {"brush_name": "MyBrush", "brush_type": "AutoSampledReferenceBrush", "brush_mesh": "chair", "sv_id": 1, "cam_dist": 0.75, "cam_fov": 0.4}}
+{"type": "fill", "data": {"target_faces": [0, 1], "mesh_name": "chair_pnt", "brush_name": "MyBrush", "high_res": false, "max_cameras": 3, "cam_dist": 0.75, "cam_fov": 0.4, "dilate": true, "clip_fill_to_faces": true, "syncmvd": false}}
+{"type": "clear_face", "data": {"target_faces": [0, 1], "mesh_name": "chair_pnt", "high_res": false}}
 {"type": "clear_all_texture", "data": {"paint_mesh_name": "chair_pnt"}}
 ```
 
-Binary messages:
+Replies the add-on understands: `texture_chunk`, `brush_icon`, `brush_status`,
+`fill_status`, `error`, `status`. Untagged replies from an older server are
+still recognised for `texture_chunk` and `brush_icon`.
 
-- `Sync to Server` and `Auto Sync` use `utils.io.send_large_image(...)`.
-- The server is expected to return binary messages encoded with `utils.io.to_binary(...)`.
+## Texture agreement
 
-Expected binary response fields:
+The server holds the authoritative texture and persists it; Blender holds a
+copy. They are kept identical automatically:
 
-- `view_id`
-- `chunk_index`
-- `chunk_total`
-- `num_views`
-- `image`
+| Operation | How the two sides converge |
+|---|---|
+| Generate Texture | The server persists its result, then the client composites it locally (soft merge) and pushes the composited texture back. |
+| Clear Faces | The server clears and persists; the client adopts the returned texture verbatim, so no push is needed. |
+| Clear All | Both sides zero the same texture. |
+| Undo | The client restores a history snapshot and pushes it, since the server keeps no history of its own. |
+| Load Texture | The client uploads the newly loaded texture. |
 
-`image` is expected to decode into a float tensor that reshapes to `H x W x 4`, matching the active Blender paint texture size.
+The `Sync to Server` button is gone. It was optional, so the two copies drifted:
+a fill was never written back, which left the server conditioning every stroke
+on the pre-session texture while the client accumulated the visible result.
+
+The sync row in the Generation panel shows `syncing ...` then `in sync with
+server`, and turns red if a push fails, so a stale server copy is visible
+rather than silent.
+
+**Cost.** A push is a full texture upload — 67 MB at 4K, uint8. Dirty-region
+transfer would cut this by roughly 10-100x and is the next planned change.
+
+## Progress and cancellation
+
+Long server operations report progress instead of freezing the panel:
+
+- **Generation** shows `inference 2/5`, then `receiving view 1/1 (3/7 chunks)`.
+  `Generate Texture` and `Clear Faces` are disabled while a fill is in flight.
+- **Brush Library** shows `preparing <name>` and disables the create buttons.
+- Failures arrive as an `error` message and are shown in red, so the panel
+  never sits in a permanent "working" state. Both operations also have local
+  timeouts (120 s for a fill, 300 s for a brush).
 
 ## Minimal Mock Server
 
-This repository does not include the production backend, but the script below is enough to test the add-on end to end with a solid-color response.
-
-Run the included mock server from the repository root:
+`mock_server.py` implements the protocol with solid-colour responses, enough to
+exercise the add-on end to end without a GPU:
 
 ```bash
-python mock_server.py
+python mock_server.py --port 10017 --texture-size 1024 --brush-delay 3
 ```
 
-`mock_server.py`:
+- `--texture-size` must match the add-on's paint texture size, so keep
+  `update_texture_4k: false` in the config when using the default `1024`.
+- `--brush-delay` fakes slow brush preparation, so you can confirm the panel
+  stays responsive and shows `preparing ...` while the server works.
 
-```python
-import asyncio
-import json
+## Tests
 
-import torch
-import websockets
-
-from utils.io import to_binary
-
-
-def make_rgba_texture(size=1024):
-    texture = torch.zeros((size, size, 4), dtype=torch.float32)
-    texture[..., 0] = 0.85
-    texture[..., 1] = 0.25
-    texture[..., 2] = 0.15
-    texture[..., 3] = 1.0
-    return texture.reshape(-1)
-
-
-async def handler(websocket):
-    async for message in websocket:
-        if isinstance(message, str):
-            payload = json.loads(message)
-            print("received:", payload["type"])
-
-            if payload["type"] in {"fill", "clear_face"}:
-                response = {
-                    "view_id": 0,
-                    "chunk_index": 0,
-                    "chunk_total": 1,
-                    "num_views": 1,
-                    "image": make_rgba_texture(1024),
-                }
-                await websocket.send(to_binary(response))
-
-
-async def main():
-    async with websockets.serve(handler, "127.0.0.1", 10017, max_size=2**28):
-        print("mock server listening on ws://127.0.0.1:10017")
-        await asyncio.Future()
-
-
-asyncio.run(main())
+```bash
+python -m unittest discover -s tests -t .
 ```
 
-For the mock server, keep `update_texture_4k: false` so the returned `1024 x 1024 x 4` texture matches the add-on's expected size.
+The suite stubs Blender, so it runs in any Python with `numpy`, `torch` and
+`tornado`. `tests/test_loopback.py` additionally drives the real websocket
+client against `mock_server.py` over a socket and is skipped when the
+`websockets` package is not installed.
 
 ## Development Notes
 
 - The add-on keeps a singleton websocket client across script reloads.
-- Texture updates are applied on the Blender main thread through a timer-driven poller.
+  `WSClient._ensure_runtime_state()` backfills fields added after that
+  singleton was constructed, so reloading after an update does not raise.
+- All server messages are applied on the Blender main thread through the
+  `poll_messages` timer; handlers call `tag_redraw_all()` so timer-driven state
+  changes repaint the sidebar.
+- The send queue is constructed **inside** the worker event loop. Building it
+  on the main thread binds it to the wrong loop on Python <= 3.9 and silently
+  drops every send; Blender 4.x ships Python 3.11, where it happens to work.
 - Texture history is stored as Blender image copies to support undo.
 
 ## Missing Information
 
-- The production websocket backend is not present here, so brush semantics and server-side fill behavior are only documented from the client contract.
-- There is no automated test suite in this repository for Blender operators or websocket integration.
-- Material setup assumptions are simple: the add-on looks for a Principled BSDF and swaps the Base Color image node.
+- The production websocket backend is not in this repository, so brush
+  semantics and server-side fill behaviour are documented from the client
+  contract plus the server sources under
+  `material-superres-private/glaze_interactive/`.
+- Blender-side behaviour (panel repaint, no UI freeze, icon rendering) is not
+  covered by the automated tests; it needs a manual pass in Blender against
+  `mock_server.py`.
+- Material setup assumptions are simple: the add-on looks for a Principled BSDF
+  and swaps the Base Color image node.

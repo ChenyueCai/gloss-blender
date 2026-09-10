@@ -5,6 +5,29 @@ from .backend import server_status_icon, server_status_text
 from .utils.image import get_preview, get_brush_preview
 
 
+#: Icon per progress state.
+_PROGRESS_ICONS = {
+    'preparing': 'SORTTIME',
+    'syncing': 'SORTTIME',
+    'ready': 'CHECKMARK',
+    'synced': 'CHECKMARK',
+    'error': 'ERROR',
+}
+
+
+def draw_progress(layout, state, message):
+    """Draw a one-line progress row for a long-running server operation.
+
+    Nothing is drawn when idle, so the panel is unchanged in the common case.
+    """
+    if state == 'idle' or not state:
+        return
+    icon = _PROGRESS_ICONS.get(state, 'INFO')
+    row = layout.row()
+    row.alert = state == 'error'
+    row.label(text=message or state, icon=icon)
+
+
 class GLAZE_PT_Panel(bpy.types.Panel):
     """Sidebar UI for configuring assets, textures, and brush actions."""
     bl_label = "GlazePanel"
@@ -83,19 +106,20 @@ class GLAZE_PT_Panel(bpy.types.Panel):
         )
         tex_row = tex_box.row(align=True)
         tex_row.operator("glaze.load_paint_texture", text="Load Texture")
-        tex_row.prop(session, "auto_sync_texture", text="Auto Sync")
         tex_box.label(
             text=f"Resolution: {'4K' if scene.update_texture_4k else '1K'}"
         )
 
         gen_box = layout.box()
         gen_box.label(text="Generation", icon="BRUSH_DATA")
+        fill_busy = session.fill_state == 'preparing'
         top_row = gen_box.row(align=True)
+        # Disabled while the server works, so a second request cannot be fired
+        # into a busy backend; the status row below says why.
+        top_row.enabled = not fill_busy
         top_row.operator("glaze.fill", text="Generate Texture", icon="PLAY")
         top_row.operator("glaze.clear_texture", text="Clear Faces", icon="X")
-
-        precompute_row = gen_box.row(align=True)
-        precompute_row.operator("glaze.precompute_local_cameras", text="Precompute Local Cameras", icon="CAMERA_DATA")
+        draw_progress(gen_box, session.fill_state, session.fill_message)
 
         settings_row = gen_box.row(align=True)
         settings_row.prop(scene, "cam_dist")
@@ -119,9 +143,10 @@ class GLAZE_PT_Panel(bpy.types.Panel):
         gen_box.label(text=f"Active Brush: {brush_name}")
 
         action_row = gen_box.row(align=True)
+        action_row.enabled = not fill_busy
         action_row.operator("glaze.undo_texture", text="Undo")
-        action_row.operator("glaze.set_texture", text="Sync to Server")
         action_row.operator("glaze.clear_all_texture", text="Clear All")
+        draw_progress(gen_box, session.sync_state, session.sync_message)
 
         brush_box = layout.box()
         header = brush_box.row(align=True)
@@ -161,10 +186,12 @@ class GLAZE_PT_Panel(bpy.types.Panel):
         col_left.prop(context.scene, "brush_cam_fov")
         col_right = split.column()
         row = col_right.row(align=True)
+        row.enabled = session.brush_state != 'preparing'
         op = row.operator("glaze.create_auto_brush", text="Auto Brush")
         op.brush_name = context.scene.new_brush_name
         op = row.operator("glaze.create_ref_brush", text="Ref Brush")
         op.brush_name = context.scene.new_brush_name
+        draw_progress(box, session.brush_state, session.brush_message)
         
         split_layout.column().operator("glaze.clear_brush_lib", text="Clear All")
      
