@@ -160,26 +160,6 @@ def purge_duplicates(context):
     return removed
 
 
-def parse_anchor_face_ids(text):
-    """Parse a comma/space separated string of face indices into a list of ints.
-
-    Invalid tokens are skipped silently so a stray comma or space does not
-    break the request.
-    """
-    if not text:
-        return []
-    ids = []
-    for tok in text.replace(";", ",").split(","):
-        tok = tok.strip()
-        if not tok:
-            continue
-        try:
-            ids.append(int(tok))
-        except ValueError:
-            continue
-    return ids
-
-
 def collect_selected_face_indices(obj):
     """Return selected face indices for an edit-mode mesh object.
 
@@ -542,14 +522,8 @@ def send_fill_request(context):
         "cam_dist": context.scene.cam_dist,
         "cam_fov": context.scene.cam_fov,
         "dilate": context.scene.dilate,
-        "camera_mode": context.scene.fill_camera_mode,
-        "use_local_camera": context.scene.use_local_camera,
         "syncmvd": context.scene.syncmvd,
     }
-    if context.scene.fill_camera_mode == "CAMERA":
-        fill_info["anchor_face_ids"] = parse_anchor_face_ids(
-            context.scene.fill_anchor_face_ids
-        )
     ws_client.send({"type": "fill", "data": fill_info})
     start_texture_updates(obj, soft_merge=context.scene.soft_add, operation="fill")
     set_fill_state(STATE_PREPARING, f"generating ({len(target_faces)} faces)")

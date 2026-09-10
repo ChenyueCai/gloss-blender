@@ -130,14 +130,10 @@ class GLAZE_PT_Panel(bpy.types.Panel):
         flags_row.prop(scene, "clip_fill_to_faces")
         flags_row.prop(scene, "dilate")
         flags_row.prop(scene, "soft_add")
-        flags_row.prop(scene, "use_local_camera")
         flags_row.prop(scene, "syncmvd")
 
         mode_row = gen_box.row(align=True)
-        mode_row.prop(scene, "fill_camera_mode", expand=True)
         mode_row.operator("glaze.show_face_ids", text="Show Face IDs", icon='COPY_ID')
-        if scene.fill_camera_mode == 'CAMERA':
-            gen_box.prop(scene, "fill_anchor_face_ids", text="Anchor Face IDs")
 
         brush_name = scene.current_brush if scene.current_brush else "None"
         gen_box.label(text=f"Active Brush: {brush_name}")
