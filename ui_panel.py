@@ -31,6 +31,7 @@ class GLAZE_PT_Panel(bpy.types.Panel):
         util_row = server_box.row(align=True)
         util_row.operator("glaze.load_config", text="Load Config", icon="FILE_FOLDER")
         util_row.operator("glaze.glaze_reload_addon", text="Reload Add-on", icon="FILE_REFRESH")
+        util_row.operator("glaze.purge", text="Purge", icon="TRASH")
 
         asset_box = layout.box()
         asset_box.label(text="Assets", icon="MESH_DATA")
@@ -81,14 +82,26 @@ class GLAZE_PT_Panel(bpy.types.Panel):
         top_row.operator("glaze.fill", text="Generate Texture", icon="PLAY")
         top_row.operator("glaze.clear_texture", text="Clear Faces", icon="X")
 
+        precompute_row = gen_box.row(align=True)
+        precompute_row.operator("glaze.precompute_local_cameras", text="Precompute Local Cameras", icon="CAMERA_DATA")
+
         settings_row = gen_box.row(align=True)
         settings_row.prop(scene, "cam_dist")
         settings_row.prop(scene, "max_cameras")
+        settings_row.prop(scene, "cam_fov")
 
         flags_row = gen_box.row(align=True)
         flags_row.prop(scene, "clip_fill_to_faces")
         flags_row.prop(scene, "dilate")
         flags_row.prop(scene, "soft_add")
+        flags_row.prop(scene, "use_local_camera")
+        flags_row.prop(scene, "syncmvd")
+
+        mode_row = gen_box.row(align=True)
+        mode_row.prop(scene, "fill_camera_mode", expand=True)
+        mode_row.operator("glaze.show_face_ids", text="Show Face IDs", icon='COPY_ID')
+        if scene.fill_camera_mode == 'CAMERA':
+            gen_box.prop(scene, "fill_anchor_face_ids", text="Anchor Face IDs")
 
         brush_name = scene.current_brush if scene.current_brush else "None"
         gen_box.label(text=f"Active Brush: {brush_name}")
@@ -107,7 +120,9 @@ class GLAZE_PT_Panel(bpy.types.Panel):
                         icon="NORMALS_VERTEX")
         
         brush_box = layout.box()
-        brush_box.label(text="Brush Library", icon="BRUSHES_ALL")
+        header = brush_box.row(align=True)
+        header.label(text="Brush Library", icon="BRUSHES_ALL")
+        header.operator("glaze.refresh_brush_lib", text="", icon="FILE_REFRESH")
         
         columns = 3
         grid = brush_box.grid_flow(
@@ -138,6 +153,8 @@ class GLAZE_PT_Panel(bpy.types.Panel):
         col_left = split.column()
 
         col_left.prop(context.scene, "new_brush_name", text="")
+        col_left.prop(context.scene, "brush_cam_dist")
+        col_left.prop(context.scene, "brush_cam_fov")
         col_right = split.column()
         row = col_right.row(align=True)
         op = row.operator("glaze.create_auto_brush", text="Auto Brush")

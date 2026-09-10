@@ -51,7 +51,7 @@ def get_brush_preview(path):
         brush_preview_collection = bpy.utils.previews.new()
 
     name = path.split('/')[-2]
-    
+
     # Avoid caching stale previews
     if name in brush_preview_collection:
         return brush_preview_collection[name].icon_id

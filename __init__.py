@@ -125,6 +125,10 @@ def register():
         name="Clip to Faces",
         description="If true, will clip texture fill to faces, if provided",
         default=True)
+    bpy.types.Scene.syncmvd = bpy.props.BoolProperty(
+        name="SyncMVD",
+        description="If true, use multi-view-diffusion synchronization on the server side",
+        default=False)
     bpy.types.Scene.soft_add = bpy.props.BoolProperty(
         name="Soft Add",
         description="If true, updates are soft-added",
@@ -141,12 +145,53 @@ def register():
         max=1.0,
         subtype='FACTOR'  # Subtype can change how it's displayed, e.g., as a percentage or distance
     )
+    bpy.types.Scene.brush_cam_dist = bpy.props.FloatProperty(
+        name="Brush Dist",
+        description="Camera distance baked into a new brush at creation time",
+        default=0.75,
+        min=0.1,
+        max=1.0,
+        subtype='FACTOR'
+    )
     bpy.types.Scene.max_cameras = bpy.props.IntProperty(
         name="Max Cam",
         description="Max fill patches to use",
         default=5,
         min=1,  # Hard minimum value
-        max=8  # Hard maximum value
+        max=200  # Hard maximum value
+    )
+    bpy.types.Scene.fill_camera_mode = bpy.props.EnumProperty(
+        name="Camera Mode",
+        description="How fill cameras are chosen",
+        items=[
+            ('AUTO', "Auto", "Server picks cameras automatically"),
+            ('CAMERA', "Camera", "Use manually entered anchor face IDs"),
+        ],
+        default='AUTO',
+    )
+    bpy.types.Scene.fill_anchor_face_ids = bpy.props.StringProperty(
+        name="Anchor Face IDs",
+        description="Comma-separated face indices used as camera anchors (e.g. 1, 20, 555)",
+        default="",
+    )
+    bpy.types.Scene.use_local_camera = bpy.props.BoolProperty(
+        name="Use Local Camera",
+        description="Use precomputed local cameras for the fill request",
+        default=False,
+    )
+    bpy.types.Scene.cam_fov = bpy.props.FloatProperty(
+        name="FOV",
+        description="Fill camera field of view in radians",
+        default=1.0472,
+        min=0.1,
+        max=3.0,
+    )
+    bpy.types.Scene.brush_cam_fov = bpy.props.FloatProperty(
+        name="Brush FOV",
+        description="Camera field of view in radians baked into a new brush at creation time",
+        default=1.0472,
+        min=0.1,
+        max=3.0,
     )
     register_client()
     
@@ -169,10 +214,17 @@ def unregister():
     del bpy.types.Scene.inference_view_settings
     del bpy.types.Scene.update_texture_4k
     del bpy.types.Scene.clip_fill_to_faces
+    del bpy.types.Scene.syncmvd
     del bpy.types.Scene.dilate
     del bpy.types.Scene.soft_add
     del bpy.types.Scene.cam_dist
+    del bpy.types.Scene.brush_cam_dist
     del bpy.types.Scene.max_cameras
+    del bpy.types.Scene.fill_camera_mode
+    del bpy.types.Scene.fill_anchor_face_ids
+    del bpy.types.Scene.use_local_camera
+    del bpy.types.Scene.cam_fov
+    del bpy.types.Scene.brush_cam_fov
     for cls in reversed(classes):
         bpy.utils.unregister_class(cls)
     

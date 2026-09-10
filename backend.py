@@ -1,3 +1,5 @@
+import re
+import threading
 import time
 from queue import Empty
 
@@ -11,6 +13,8 @@ from .utils.io import from_binary, send_large_image, to_binary
 from .utils.mesh import (
     apply_texture,
     base_name,
+    binarize_paint_alpha,
+    clear_faces_local,
     clear_texture,
     get_current_texture,
     update_texture,
@@ -39,6 +43,70 @@ def server_status_text():
 def server_status_icon():
     """Return the Blender icon id that matches the websocket state."""
     return "CHECKMARK" if ws_client.is_connected else "ERROR"
+
+
+_DUP_NAME_RE = re.compile(r"\.\d{3,}(?:\.|$)")
+
+
+def purge_duplicates(context):
+    """Remove ORPHAN datablocks whose names contain Blender duplicate suffixes.
+
+    Catches names like ``mesh.001``, ``mesh.001.paint.png``, and
+    ``mesh.bar.001`` across objects, meshes, materials, and images. Only
+    datablocks with no remaining users are removed — actively-linked ones
+    are kept, so loading a second mesh whose internal asset names collide
+    with the first's (and therefore got auto-suffixed ``.001`` by the
+    importer) doesn't wipe its materials, textures, or mesh data. Returns
+    a dict with the per-collection removal counts.
+    """
+    removed = {"objects": 0, "meshes": 0, "materials": 0, "images": 0}
+
+    for key, coll in (
+        ("objects", bpy.data.objects),
+        ("meshes", bpy.data.meshes),
+        ("materials", bpy.data.materials),
+        ("images", bpy.data.images),
+    ):
+        targets = [
+            item for item in coll if _DUP_NAME_RE.search(item.name) and item.users == 0
+        ]
+        for item in targets:
+            coll.remove(item, do_unlink=True)
+        removed[key] = len(targets)
+
+    scene = context.scene
+    if (
+        scene.current_paint_mesh is not None
+        and scene.current_paint_mesh.name not in bpy.data.objects
+    ):
+        scene.current_paint_mesh = None
+    if (
+        scene.current_reference_mesh is not None
+        and scene.current_reference_mesh.name not in bpy.data.objects
+    ):
+        scene.current_reference_mesh = None
+
+    return removed
+
+
+def parse_anchor_face_ids(text):
+    """Parse a comma/space separated string of face indices into a list of ints.
+
+    Invalid tokens are skipped silently so a stray comma or space does not
+    break the request.
+    """
+    if not text:
+        return []
+    ids = []
+    for tok in text.replace(";", ",").split(","):
+        tok = tok.strip()
+        if not tok:
+            continue
+        try:
+            ids.append(int(tok))
+        except ValueError:
+            continue
+    return ids
 
 
 def collect_selected_face_indices(obj):
@@ -108,6 +176,14 @@ def _texture_poll():
         chunk_total = msg["chunk_total"]
         num_views = msg["num_views"]
         image_chunk = msg["image"]
+        print(
+            "[TextureUpdate] received chunk",
+            chunk_index,
+            "of",
+            chunk_total,
+            "for view",
+            view_id,
+        )
 
         _TEXTURE_STATE["expected_views"] = num_views
 
@@ -195,15 +271,31 @@ def load_paint_texture(context, filepath, sync_to_server=True):
     if obj is None:
         raise RuntimeError("Load a paint mesh before loading a paint texture")
 
-    apply_texture(obj, filepath, suffix="paint")
+    image = apply_texture(obj, filepath, suffix="paint")
+    binarize_paint_alpha(image)
     context.scene.glaze_session.loaded_paint_texture = filepath
 
     if sync_to_server and ws_client.is_connected:
         sync_paint_texture(context)
 
 
+def _sync_paint_texture_worker(pixels, mesh_name):
+    """Chunk, serialize, and queue a paint texture from a background thread."""
+    try:
+        msgs = send_large_image("texture", "set_texture", pixels)
+        for msg in msgs:
+            msg["mesh_name"] = mesh_name
+            ws_client.send(to_binary(msg))
+    except Exception as e:
+        print(f"sync_paint_texture worker failed: {e}")
+
+
 def sync_paint_texture(context):
     """Send the active paint texture to the websocket server in binary chunks.
+
+    Pixel readout happens on the calling (main) thread because Blender data
+    access is main-thread-only; chunking, serialization, and queuing are
+    dispatched to a background thread so the UI does not block.
 
     Args:
         context: Blender context containing the current paint mesh.
@@ -229,10 +321,11 @@ def sync_paint_texture(context):
     current_texture_pixels = np.empty(buffer_size, dtype=np.float32)
     current_paint_texture.pixels.foreach_get(current_texture_pixels)
 
-    msgs = send_large_image("texture", "set_texture", current_texture_pixels)
-    for msg in msgs:
-        msg["mesh_name"] = paint_obj.name
-        ws_client.send(to_binary(msg))
+    threading.Thread(
+        target=_sync_paint_texture_worker,
+        args=(current_texture_pixels, paint_obj.name),
+        daemon=True,
+    ).start()
 
 
 def send_fill_request(context):
@@ -264,13 +357,52 @@ def send_fill_request(context):
         "mesh_name": base_name(obj.name),
         "brush_name": context.scene.current_brush,
         "high_res": context.scene.update_texture_4k,
-        "update": context.scene.clip_fill_to_faces,
+        "clip_fill_to_faces": context.scene.clip_fill_to_faces,
         "max_cameras": context.scene.max_cameras,
         "cam_dist": context.scene.cam_dist,
+        "cam_fov": context.scene.cam_fov,
         "dilate": context.scene.dilate,
+        "camera_mode": context.scene.fill_camera_mode,
+        "use_local_camera": context.scene.use_local_camera,
+        "syncmvd": context.scene.syncmvd,
     }
+    if context.scene.fill_camera_mode == "CAMERA":
+        fill_info["anchor_face_ids"] = parse_anchor_face_ids(
+            context.scene.fill_anchor_face_ids
+        )
     ws_client.send({"type": "fill", "data": fill_info})
     start_texture_updates(obj, soft_merge=context.scene.soft_add)
+    return target_faces
+
+
+def send_precompute_local_cameras_request(context):
+    """Queue a precompute-local-cameras request for the selected paint-mesh faces.
+
+    Args:
+        context: Blender context containing the active paint mesh and camera
+            settings.
+
+    Returns:
+        list[int]: Face indices sent with the request.
+
+    Raises:
+        RuntimeError: If no paint mesh is loaded or the server is disconnected.
+    """
+    obj = context.scene.current_paint_mesh
+    if obj is None:
+        raise RuntimeError("Load a paint mesh before precomputing local cameras")
+    if not ws_client.is_connected:
+        raise RuntimeError("Server not connected")
+
+    target_faces = collect_selected_face_indices(obj)
+    precompute_info = {
+        "target_faces": target_faces,
+        "mesh_name": base_name(obj.name),
+        "max_cameras": context.scene.max_cameras,
+        "cam_dist": context.scene.cam_dist,
+        "cam_fov": context.scene.cam_fov,
+    }
+    ws_client.send({"type": "precompute_local_cameras", "data": precompute_info})
     return target_faces
 
 
@@ -289,13 +421,12 @@ def send_clear_request(context):
     obj = context.scene.current_paint_mesh
     if obj is None:
         raise RuntimeError("Load a paint mesh before clearing texture regions")
-    if not ws_client.is_connected:
-        raise RuntimeError("Server not connected")
 
     target_faces = collect_selected_face_indices(obj)
     clear_info = {
         "target_faces": target_faces,
         "mesh_name": base_name(obj.name),
+        "high_res": context.scene.update_texture_4k,
     }
     ws_client.send({"type": "clear_face", "data": clear_info})
     start_texture_updates(obj, soft_merge=False)

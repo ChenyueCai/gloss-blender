@@ -1,10 +1,11 @@
 import bpy
 import bmesh
 
-from .backend import clear_all_texture, load_paint_texture, send_clear_request, send_fill_request, sync_paint_texture
+from .backend import clear_all_texture, collect_selected_face_indices, load_paint_texture, purge_duplicates, send_clear_request, send_fill_request, send_precompute_local_cameras_request, sync_paint_texture
 from .utils.config import load_glaze_config_from_yaml
 from .utils.mesh import load_mesh, apply_texture, undo_texture, \
-    is_normal_connected, disconnect_normal, connect_normal, set_view_center, base_name
+    is_normal_connected, disconnect_normal, connect_normal, set_view_center, base_name, \
+    strip_to_diffuse_normal
 from .utils.io import from_binary
 from .client import ws_client
 
@@ -13,18 +14,36 @@ import re
 import torchvision
 
 
+def _mesh_stem_from_path(filepath):
+    """Derive a mesh stem from ``filepath``.
+
+    glTF assets are commonly distributed as ``<asset_name>/scene.gltf`` (with
+    sibling ``scene.bin`` / ``textures/``). When the picked file's stem is the
+    generic ``scene``, use the parent directory name so the mesh ends up named
+    after the asset rather than the literal ``scene`` file.
+    """
+    stem = os.path.splitext(os.path.basename(filepath))[0]
+    if stem.lower() == "scene":
+        parent = os.path.basename(os.path.dirname(filepath))
+        if parent:
+            return parent
+    return stem
+
+
 class GLAZE_OT_LoadReferenceMesh(bpy.types.Operator):
     """Load Reference Mesh"""
     bl_idname = "glaze.load_reference_mesh"
     bl_label = "Load Reference Mesh"
     bl_options = {'UNDO'}
-    
+
     filepath: bpy.props.StringProperty(subtype="FILE_PATH")
+    filter_glob: bpy.props.StringProperty(default="*.obj;*.gltf;*.glb", options={'HIDDEN'})
 
     def execute(self, context):
         print("Loading reference mesh:", self.filepath)
-        mesh_name = os.path.splitext(os.path.basename(self.filepath))[0] + "_ref"
-        ref_mesh = load_mesh(mesh_path=self.filepath, name=mesh_name)  # You can change importer
+        mesh_name = _mesh_stem_from_path(self.filepath) + "_ref"
+        purge_duplicates(context)
+        ref_mesh = load_mesh(mesh_path=self.filepath, name=mesh_name, remove_existing=True)
         ref_mesh.location = (-1.5, 0, 0)
         context.scene.current_reference_mesh = ref_mesh
         screen = context.window.screen
@@ -47,19 +66,22 @@ class GLAZE_OT_LoadPaintMesh(bpy.types.Operator):
     bl_idname = "glaze.load_paint_mesh"
     bl_label = "Load Paint Mesh"
     bl_options = {'UNDO'}
-    
+
     filepath: bpy.props.StringProperty(subtype="FILE_PATH")
+    filter_glob: bpy.props.StringProperty(default="*.obj;*.gltf;*.glb", options={'HIDDEN'})
 
     def execute(self, context):
         print("Loading paint mesh:", self.filepath)
-        mesh_name = os.path.splitext(os.path.basename(self.filepath))[0]  + "_pnt"
-        paint_mesh = load_mesh(mesh_path=self.filepath, name=mesh_name)
+        mesh_name = _mesh_stem_from_path(self.filepath) + "_pnt"
+        purge_duplicates(context)
+        paint_mesh = load_mesh(mesh_path=self.filepath, name=mesh_name, remove_existing=True)
         paint_mesh.location = (1.5, 0, 0)
         context.scene.current_paint_mesh = paint_mesh
         screen = context.window.screen
         areas = [a for a in screen.areas if a.type == 'VIEW_3D']
         left_area, right_area = areas[0], areas[1]
         set_view_center(paint_mesh, left_area)
+        strip_to_diffuse_normal(paint_mesh)
         # remove the basecolor slots
         apply_texture(paint_mesh, None, suffix='paint')
         context.scene.glaze_session.loaded_paint_texture = ""
@@ -261,6 +283,8 @@ class GLAZE_OT_create_auto_brushes(bpy.types.Operator):
             "brush_type": self.brush_type,
             "brush_mesh": context.scene.current_view.mesh[:-4],
             "sv_id": context.scene.current_view.sv_id,
+            "cam_dist": context.scene.brush_cam_dist,
+            "cam_fov": context.scene.brush_cam_fov,
         }
 
         self.message = {"type": "add_brush", "data": brush_info}
@@ -328,6 +352,8 @@ class GLAZE_OT_create_ref_brushes(bpy.types.Operator):
             "brush_type": self.brush_type,
             "brush_mesh": context.scene.current_view.mesh[:-4],
             "sv_id": context.scene.current_view.sv_id,
+            "cam_dist": context.scene.brush_cam_dist,
+            "cam_fov": context.scene.brush_cam_fov,
             "reference_faces": self.reference_faces,
         }
 
@@ -360,6 +386,52 @@ class GLAZE_OT_ClearBrushLib(bpy.types.Operator):
         context.scene.glaze_brushes.clear()
         self.report({'INFO'}, f"Clear All Brushes")
         return {"FINISHED"}
+
+
+class GLAZE_OT_RefreshBrushLib(bpy.types.Operator):
+    """Rescan the brushes folder on disk and sync ``scene.glaze_brushes``.
+
+    Adds an entry for every ``<brushes_folder>/<name>/icon.png`` not already
+    in the library, and prunes entries whose icon no longer exists on disk.
+    Brush metadata other than the name (mesh, sv_id, brush_type) is left at
+    its property defaults for entries discovered on disk, since those fields
+    aren't persisted alongside the icon.
+    """
+    bl_idname = "glaze.refresh_brush_lib"
+    bl_label = "Refresh Brush Library"
+
+    def execute(self, context):
+        scene = context.scene
+        folder = scene.glaze_config.brushes_folder
+        if not folder or not os.path.isdir(folder):
+            self.report({'ERROR'}, "Brushes folder is not set or does not exist")
+            return {'CANCELLED'}
+
+        on_disk = set()
+        for entry in os.listdir(folder):
+            brush_dir = os.path.join(folder, entry)
+            if os.path.isdir(brush_dir) and os.path.isfile(os.path.join(brush_dir, "icon.png")):
+                on_disk.add(entry)
+
+        in_memory = {b.name for b in scene.glaze_brushes}
+
+        for stale in list(in_memory - on_disk):
+            remove_item_by_name(scene.glaze_brushes, stale)
+            if scene.current_brush == stale:
+                scene.current_brush = ""
+
+        added = 0
+        for name in sorted(on_disk - in_memory):
+            brush = scene.glaze_brushes.add()
+            brush.name = name
+            added += 1
+
+        removed = len(in_memory - on_disk)
+        self.report(
+            {'INFO'},
+            f"Brush library refreshed (+{added} / -{removed}, total {len(scene.glaze_brushes)})",
+        )
+        return {'FINISHED'}
 
     
 class GLAZE_OT_save_brush(bpy.types.Operator):
@@ -423,6 +495,49 @@ class GLAZE_OT_FillTexture(bpy.types.Operator):
         return {'FINISHED'}
 
 
+class GLAZE_OT_ShowFaceIds(bpy.types.Operator):
+    """Copy a comma-separated list of the selected face IDs to the clipboard."""
+    bl_idname = "glaze.show_face_ids"
+    bl_label = "Show Face IDs"
+    bl_options = {'REGISTER'}
+
+    def execute(self, context):
+        obj = context.edit_object or context.scene.current_paint_mesh
+        if obj is None or obj.type != 'MESH' or obj.mode != 'EDIT':
+            self.report({'ERROR'}, "Enter Edit Mode on a mesh and select faces")
+            return {'CANCELLED'}
+
+        ids = collect_selected_face_indices(obj)
+        if not ids:
+            self.report({'WARNING'}, "No faces selected")
+            return {'CANCELLED'}
+
+        text = ", ".join(str(i) for i in ids)
+        context.window_manager.clipboard = text
+        self.report({'INFO'}, f"Face IDs ({len(ids)}): {text}")
+        return {'FINISHED'}
+
+
+class GLAZE_OT_PrecomputeLocalCameras(bpy.types.Operator):
+    """Send a precompute-local-cameras request for the selected faces."""
+    bl_idname = "glaze.precompute_local_cameras"
+    bl_label = "Precompute Local Cameras"
+    bl_options = {'REGISTER'}
+
+    def execute(self, context):
+        try:
+            target_faces = send_precompute_local_cameras_request(context)
+        except RuntimeError as exc:
+            self.report({'ERROR'}, str(exc))
+            return {'CANCELLED'}
+
+        if not target_faces:
+            self.report({'WARNING'}, "No faces selected; sent empty precompute request")
+        else:
+            self.report({'INFO'}, f"Precompute local cameras request sent ({len(target_faces)} faces)")
+        return {'FINISHED'}
+
+
 class GLAZE_OT_SetPaintTexture(bpy.types.Operator):
     """Push the active paint texture to the server."""
     bl_idname = "glaze.set_texture"
@@ -436,7 +551,7 @@ class GLAZE_OT_SetPaintTexture(bpy.types.Operator):
             self.report({'ERROR'}, str(exc))
             return {'CANCELLED'}
 
-        self.report({'INFO'}, "Paint texture synced to server")
+        self.report({'INFO'}, "Paint texture sync queued")
         return {"FINISHED"}
 
 
@@ -526,6 +641,22 @@ class GLAZE_OT_show_brush_menu(bpy.types.Operator):
             "glaze.remove_brush",
             icon='TRASH'
         ).brush_name = self.brush_name
+
+
+class GLAZE_OT_Purge(bpy.types.Operator):
+    """Remove duplicate datablocks (.001, .002, ...) and their related images"""
+    bl_idname = "glaze.purge"
+    bl_label = "Purge Duplicates"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+        removed = purge_duplicates(context)
+        self.report(
+            {'INFO'},
+            (f"Purged {removed['objects']} obj, {removed['meshes']} mesh, "
+             f"{removed['materials']} mat, {removed['images']} img"),
+        )
+        return {'FINISHED'}
 
 
 class GLAZE_OT_ReloadAddon(bpy.types.Operator):
