@@ -235,7 +235,6 @@ The sync row under **Generation** shows `syncing ...`, then `in sync with server
 | `utils/mesh.py` | Mesh import, texture application, and texture update utilities |
 | `utils/io.py` | Binary encoding, the pixel codec, and chunk reassembly |
 | `mock_server.py` | Reference server implementation for testing without a GPU |
-| `tests/` | Headless test suite (Blender is stubbed) |
 | `data/config.yaml`, `data/download.py` | Example session config with relative folders, and the script that fills `data/` from Hugging Face |
 
 </details>
@@ -264,17 +263,6 @@ Replies the add-on understands: `texture_chunk`, `brush_icon`, `brush_status`, `
 </details>
 
 <details>
-<summary><b>Tests</b></summary>
-
-```bash
-python -m unittest discover -s tests -t .
-```
-
-The suite stubs Blender, so it runs in any Python with `numpy`, `torch` and `tornado`. `tests/test_loopback.py` additionally drives the real websocket client against `mock_server.py` over a socket and is skipped when the `websockets` package is not installed.
-
-</details>
-
-<details>
 <summary><b>Development notes</b></summary>
 
 - The add-on keeps a singleton websocket client across script reloads. `WSClient._ensure_runtime_state()` backfills fields added after that singleton was constructed, so reloading after an update does not raise.
@@ -288,7 +276,7 @@ The suite stubs Blender, so it runs in any Python with `numpy`, `torch` and `tor
 <summary><b>Missing information</b></summary>
 
 - The production websocket backend is not in this repository. Brush semantics and server-side fill behaviour are documented from the client contract plus the server sources under `material-superres-private/glaze_interactive/`.
-- Blender-side behaviour (panel repaint, no UI freeze, icon rendering) is not covered by the automated tests; it needs a manual pass in Blender against `mock_server.py`.
+- Blender-side behaviour (panel repaint, no UI freeze, icon rendering) needs a manual pass in Blender against `mock_server.py`.
 - Material setup assumptions are simple: the add-on looks for a Principled BSDF and swaps the Base Color image node.
 
 </details>

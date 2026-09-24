@@ -31,16 +31,14 @@ handler that raises is caught and logged so it cannot stall the queue.
 delivered that nothing consumes.
 
 Type constants live in `protocol.py`, mirrored at
-`material-superres-private/glaze_interactive/protocol.py`;
-`tests/test_codec.py` asserts the two stay in sync.
+`material-superres-private/glaze_interactive/protocol.py`; keep the two in sync.
 
 > **Why this exists.** Replies used to be untagged, and two timers
 > (`poll_str_messages`, always registered at 0.2 s, and a per-brush
 > `poll_bin_messages` at 0.1 s) each popped *every* message from one shared
 > list and discarded the kinds they did not recognise. Whichever fired first
 > ate the brush icon, and the brush poller — which had no timeout — then
-> polled forever, leaking a timer per attempt. `tests/test_router.py`
-> is the regression suite for that.
+> polled forever, leaking a timer per attempt.
 
 ## Encoding
 
@@ -150,13 +148,3 @@ replies to `add_brush` with `brush_status` + a uint8 `brush_icon`, and to
 `fill` / `clear_face` with `fill_status` + chunked `texture_chunk` frames.
 `--brush-delay` fakes slow preparation so you can watch the panel stay
 responsive.
-
-## Tests
-
-```bash
-python -m unittest discover -s tests -t .
-```
-
-`tests/test_loopback.py` runs the real client against the real mock server over
-a socket; it skips when the `websockets` package is unavailable (it ships with
-Blender's Python, not the cluster conda envs).
