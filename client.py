@@ -184,9 +184,9 @@ class WSClient:
             self.stats["unhandled"] += 1
             if msg_type == MSG_STATUS:
                 data = payload.get("data") or {}
-                print("[glaze]", data.get("message", payload))
+                print("[gloss]", data.get("message", payload))
             else:
-                print(f"[glaze] no handler for message type {msg_type!r}")
+                print(f"[gloss] no handler for message type {msg_type!r}")
             return False
 
         for handler in handlers:
@@ -194,7 +194,7 @@ class WSClient:
                 handler(payload)
             except Exception as exc:  # a bad handler must not stall the queue
                 self.stats["handler_errors"] += 1
-                print(f"[glaze] handler for {msg_type!r} failed: {exc}")
+                print(f"[gloss] handler for {msg_type!r} failed: {exc}")
         self.stats["dispatched"] += 1
         return True
 
@@ -210,7 +210,7 @@ class WSClient:
                 payload = self.decode(raw)
             except Exception as exc:
                 self.stats["decode_errors"] += 1
-                print(f"[glaze] failed to decode message: {exc}")
+                print(f"[gloss] failed to decode message: {exc}")
                 continue
             self.dispatch(payload)
         return POLL_INTERVAL

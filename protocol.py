@@ -1,4 +1,4 @@
-"""Wire-protocol constants shared by the add-on and the Glaze server.
+"""Wire-protocol constants shared by the add-on and the Gloss server.
 
 Every server -> client message carries a ``type`` field so the client can route
 it to exactly one consumer. Before this contract existed, replies were

@@ -5,8 +5,8 @@ import importlib
 bl_info = {
     "version": (0, 1),
     "blender": (4, 0, 0),
-    "location": "View3D > Sidebar > glaze-ui",
-    "description": "GLAZE Painter",
+    "location": "View3D > Sidebar > gloss-ui",
+    "description": "GLOSS Painter",
     "category": "Development",
 }
 
@@ -34,7 +34,7 @@ importlib.reload(image)
 importlib.reload(brush)
 
 
-from .client import register_client, unregister_client
+from .client import register_client, unregister_client, ws_client
 from .backend import register_backend_handlers, unregister_backend_handlers
 from .ui_panel import *
 from .operators import *
@@ -71,7 +71,7 @@ def draw_text(region, x=50, y=125):
 
         # Draw the layout lines
         layout_lines = [
-            "GLAZE add-on Layout",
+            "GLOSS add-on Layout",
             "LEFT: Paint Playground ",
             "TOP-RIGHT: Palette 🎨",
             "BOTTOM-RIGHT: Control 🔧",
@@ -106,13 +106,13 @@ def register():
         except ValueError:
             # Already registered
             print(f"{cls.__name__} already registered, skipping.")
-    bpy.types.Scene.glaze_config = bpy.props.PointerProperty(type=GlazeConfig)
+    bpy.types.Scene.gloss_config = bpy.props.PointerProperty(type=GlossConfig)
     bpy.types.Scene.current_paint_mesh = bpy.props.PointerProperty(name="Mesh", type=bpy.types.Object)
     bpy.types.Scene.current_reference_mesh = bpy.props.PointerProperty(name="Mesh", type=bpy.types.Object)
-    bpy.types.Scene.current_view = bpy.props.PointerProperty(type=GlazeSingleView)  
-    bpy.types.Scene.glaze_session = bpy.props.PointerProperty(type=GlazeSessionState)
+    bpy.types.Scene.current_view = bpy.props.PointerProperty(type=GlossSingleView)  
+    bpy.types.Scene.gloss_session = bpy.props.PointerProperty(type=GlossSessionState)
     bpy.types.Scene.current_brush = bpy.props.StringProperty(name="Current Brush Name", default="")
-    bpy.types.Scene.glaze_brushes = bpy.props.CollectionProperty(type=GlazeBrush)
+    bpy.types.Scene.gloss_brushes = bpy.props.CollectionProperty(type=GlossBrush)
     bpy.types.Scene.new_brush_name = bpy.props.StringProperty(name="New Brush Name", default="MyBrush")
     bpy.types.Scene.target_faces = bpy.props.CollectionProperty(type=FaceIndexItem)
     bpy.types.Scene.reference_faces = bpy.props.CollectionProperty(type=FaceIndexItem)
@@ -177,20 +177,39 @@ def register():
     )
     register_client()
     register_backend_handlers()
-    
+    config.register_config_handlers()
+    # Scenes have no folders until a config is loaded. Give the current one
+    # the shipped data/config.yaml once the UI is up; load_post covers files
+    # opened later.
+    bpy.app.timers.register(_apply_default_config_once, first_interval=0)
+
+
+def _apply_default_config_once():
+    """Timer body: load the shipped config into unconfigured scenes, once."""
+    try:
+        if config.apply_default_config():
+            url = bpy.context.scene.gloss_config.server_url
+            if url and url != ws_client.uri:
+                ws_client.restart(url)
+    except Exception as exc:  # noqa: BLE001 - never leave a timer raising
+        print(f"[gloss] default config not applied: {exc}")
+    return None
+
+
 def unregister():
     """Unregister the add-on classes, scene properties, overlay, and client."""
+    config.unregister_config_handlers()
     unregister_backend_handlers()
     unregister_client()
     for h in handlers:
         bpy.types.SpaceView3D.draw_handler_remove(h, 'WINDOW')
         handlers.clear()
     del bpy.types.Scene.current_brush
-    del bpy.types.Scene.glaze_brushes
-    del bpy.types.Scene.glaze_config
+    del bpy.types.Scene.gloss_brushes
+    del bpy.types.Scene.gloss_config
     del bpy.types.Scene.new_brush_name
     del bpy.types.Scene.current_view
-    del bpy.types.Scene.glaze_session
+    del bpy.types.Scene.gloss_session
     del bpy.types.Scene.current_paint_mesh
     del bpy.types.Scene.current_reference_mesh
     del bpy.types.Scene.target_faces

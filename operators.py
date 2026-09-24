@@ -2,7 +2,7 @@ import bpy
 import bmesh
 
 from .backend import clear_all_texture, collect_selected_face_indices, load_paint_texture, purge_duplicates, send_clear_request, send_fill_request
-from .utils.config import load_glaze_config_from_yaml
+from .utils.config import load_gloss_config_from_yaml
 from .utils.mesh import load_mesh, apply_texture, undo_texture, \
     is_normal_connected, disconnect_normal, connect_normal, set_view_center, base_name, \
     strip_to_diffuse_normal
@@ -15,7 +15,12 @@ from .protocol import (
     STATE_PREPARING,
     STATE_READY,
 )
-from .backend import push_texture_to_server, set_brush_state, tag_redraw_all
+from .backend import (
+    BRUSH_TIMEOUT_S,
+    push_texture_to_server,
+    set_brush_state,
+    tag_redraw_all,
+)
 
 import os
 import re
@@ -40,9 +45,9 @@ def _mesh_stem_from_path(filepath):
     return stem
 
 
-class GLAZE_OT_LoadReferenceMesh(bpy.types.Operator):
+class GLOSS_OT_LoadReferenceMesh(bpy.types.Operator):
     """Load Reference Mesh"""
-    bl_idname = "glaze.load_reference_mesh"
+    bl_idname = "gloss.load_reference_mesh"
     bl_label = "Load Reference Mesh"
     bl_options = {'UNDO'}
 
@@ -68,7 +73,7 @@ class GLAZE_OT_LoadReferenceMesh(bpy.types.Operator):
         return {'FINISHED'}
 
     def invoke(self, context, event):
-        folder = context.scene.glaze_config.mesh_folder
+        folder = context.scene.gloss_config.mesh_folder
         if folder:
             folder = os.path.abspath(bpy.path.abspath(os.path.expanduser(folder)))
             if not os.path.isdir(folder):
@@ -83,9 +88,9 @@ class GLAZE_OT_LoadReferenceMesh(bpy.types.Operator):
         return {'RUNNING_MODAL'}
 
 
-class GLAZE_OT_LoadPaintMesh(bpy.types.Operator):
+class GLOSS_OT_LoadPaintMesh(bpy.types.Operator):
     """Load Paint Mesh"""
-    bl_idname = "glaze.load_paint_mesh"
+    bl_idname = "gloss.load_paint_mesh"
     bl_label = "Load Paint Mesh"
     bl_options = {'UNDO'}
 
@@ -107,7 +112,7 @@ class GLAZE_OT_LoadPaintMesh(bpy.types.Operator):
         strip_to_diffuse_normal(paint_mesh)
         # remove the basecolor slots
         apply_texture(paint_mesh, None, suffix='paint')
-        context.scene.glaze_session.loaded_paint_texture = ""
+        context.scene.gloss_session.loaded_paint_texture = ""
         mesh_info = {"mesh_name": base_name(paint_mesh.name)[:-4], "paint_mesh_name": paint_mesh.name,
                      "high_res": context.scene.update_texture_4k}
         message = {"type": "add_pnt_mesh", 
@@ -116,7 +121,7 @@ class GLAZE_OT_LoadPaintMesh(bpy.types.Operator):
         return {'FINISHED'}
 
     def invoke(self, context, event):
-        folder = context.scene.glaze_config.mesh_folder
+        folder = context.scene.gloss_config.mesh_folder
         if folder:
             folder = os.path.abspath(bpy.path.abspath(os.path.expanduser(folder)))
             if not os.path.isdir(folder):
@@ -131,18 +136,18 @@ class GLAZE_OT_LoadPaintMesh(bpy.types.Operator):
         return {'RUNNING_MODAL'}
 
 
-class GLAZE_OT_LoadConfig(bpy.types.Operator):
-    """Load Glaze Session Config"""
-    bl_idname = "glaze.load_config"
-    bl_label = "Load Glaze Config"
+class GLOSS_OT_LoadConfig(bpy.types.Operator):
+    """Load Gloss Session Config"""
+    bl_idname = "gloss.load_config"
+    bl_label = "Load Gloss Config"
 
     filepath: bpy.props.StringProperty(subtype='FILE_PATH')
 
     def execute(self, context):
         scene = context.scene
-        cfg = scene.glaze_config
+        cfg = scene.gloss_config
 
-        load_glaze_config_from_yaml(self.filepath)
+        load_gloss_config_from_yaml(self.filepath)
         ws_client.configure(cfg.server_url)
 
         self.report({'INFO'}, f"Config loaded from {self.filepath}")
@@ -153,9 +158,9 @@ class GLAZE_OT_LoadConfig(bpy.types.Operator):
         return {'RUNNING_MODAL'}
 
 
-class GLAZE_OT_SetReference(bpy.types.Operator):
+class GLOSS_OT_SetReference(bpy.types.Operator):
     """Set Reference Image for Reference Mesh"""
-    bl_idname = "glaze.set_reference"
+    bl_idname = "gloss.set_reference"
     bl_label = "Set Reference"
 
     def execute(self, context):
@@ -170,7 +175,7 @@ class GLAZE_OT_SetReference(bpy.types.Operator):
             return {'CANCELLED'}
 
         mesh_name = base_name(context.scene.current_reference_mesh.name)
-        texture_folder = context.scene.glaze_config.single_views_texture_folder
+        texture_folder = context.scene.gloss_config.single_views_texture_folder
         match = re.match(r"view(\d+)\.", os.path.basename(single_view_path))
 
         if not match or not texture_folder:
@@ -194,16 +199,16 @@ class GLAZE_OT_SetReference(bpy.types.Operator):
         return {'FINISHED'}
 
 
-class GLAZE_OT_LoadReferenceView(bpy.types.Operator):
+class GLOSS_OT_LoadReferenceView(bpy.types.Operator):
     """Load Reference View"""
-    bl_idname = "glaze.load_reference_view"
+    bl_idname = "gloss.load_reference_view"
     bl_label = "Select Reference View"
 
     filepath: bpy.props.StringProperty(subtype="FILE_PATH", options={'SKIP_SAVE'})
     directory: bpy.props.StringProperty(subtype="DIR_PATH", options={'HIDDEN', 'SKIP_SAVE'})
 
     def invoke(self, context, event):
-        folder = context.scene.glaze_config.single_views_folder
+        folder = context.scene.gloss_config.single_views_folder
         if folder:
             folder = os.path.abspath(bpy.path.abspath(os.path.expanduser(folder)))
             if not os.path.isdir(folder):
@@ -223,9 +228,9 @@ class GLAZE_OT_LoadReferenceView(bpy.types.Operator):
         return {'FINISHED'}
 
 
-class GLAZE_OT_LoadPaintTexture(bpy.types.Operator):
+class GLOSS_OT_LoadPaintTexture(bpy.types.Operator):
     """Load a texture onto the current paint mesh"""
-    bl_idname = "glaze.load_paint_texture"
+    bl_idname = "gloss.load_paint_texture"
     bl_label = "Load Paint Texture"
 
     filepath: bpy.props.StringProperty(subtype="FILE_PATH")
@@ -245,31 +250,30 @@ class GLAZE_OT_LoadPaintTexture(bpy.types.Operator):
         return {'FINISHED'}
 
 
-class GLAZE_OT_ReconnectServer(bpy.types.Operator):
+class GLOSS_OT_ReconnectServer(bpy.types.Operator):
     """Reconnect to the websocket server"""
-    bl_idname = "glaze.reconnect_server"
+    bl_idname = "gloss.reconnect_server"
     bl_label = "Reconnect Server"
 
     def execute(self, context):
-        ws_client.restart(context.scene.glaze_config.server_url)
-        self.report({'INFO'}, f"Reconnecting to {context.scene.glaze_config.server_url}")
+        ws_client.restart(context.scene.gloss_config.server_url)
+        self.report({'INFO'}, f"Reconnecting to {context.scene.gloss_config.server_url}")
         return {'FINISHED'}
 
 
 ################################## Brush Operators Utils ####################################
 
 def brush_exists(scene, name):
-    """Return ``True`` when ``scene.glaze_brushes`` already contains ``name``."""
-    for b in scene.glaze_brushes:
+    """Return ``True`` when ``scene.gloss_brushes`` already contains ``name``."""
+    for b in scene.gloss_brushes:
         if b.name == name:
             return True
     return False
 
 
-#: Seconds to wait for a brush icon before declaring the request failed.
-BRUSH_TIMEOUT_S = 300
-
-#: brush_name -> deadline, for brushes whose icon has not arrived yet.
+#: brush_name -> deadline, for brushes whose icon has not arrived yet. The
+#: per-request deadline below and the panel guard in backend.py must agree on
+#: how long a brush may take, so BRUSH_TIMEOUT_S is defined there.
 _PENDING_BRUSHES = {}
 
 
@@ -301,7 +305,7 @@ def _finish_brush(context, brush_name, brush_type, brush_sv_id):
     """Register a completed brush in the scene collection."""
     if brush_exists(context.scene, brush_name):
         return
-    brush = context.scene.glaze_brushes.add()
+    brush = context.scene.gloss_brushes.add()
     brush.name = brush_name
     brush.sv_id = brush_sv_id
     brush.brush_type = brush_type
@@ -317,7 +321,7 @@ def start_brush_listener(context, brush_name, brush_type, brush_sv_id):
 
     Side Effects:
         Creates the brush icon directory, writes ``icon.png``, appends to
-        ``scene.glaze_brushes``, and registers a router handler plus a timer.
+        ``scene.gloss_brushes``, and registers a router handler plus a timer.
     """
     _PENDING_BRUSHES[brush_name] = time.time() + BRUSH_TIMEOUT_S
 
@@ -339,7 +343,7 @@ def start_brush_listener(context, brush_name, brush_type, brush_sv_id):
         try:
             pixels = decode_pixels(icon, payload.get("dtype", DTYPE_UINT8))
             brush_dir = os.path.join(
-                bpy.path.abspath(context.scene.glaze_config.brushes_folder),
+                bpy.path.abspath(context.scene.gloss_config.brushes_folder),
                 brush_name,
             )
             os.makedirs(brush_dir, exist_ok=True)
@@ -369,9 +373,9 @@ def start_brush_listener(context, brush_name, brush_type, brush_sv_id):
     set_brush_state(STATE_PREPARING, f"creating brush: {brush_name}")
 
 
-class GLAZE_OT_create_auto_brushes(bpy.types.Operator):
+class GLOSS_OT_create_auto_brushes(bpy.types.Operator):
     """Create New Auto Type Brush"""
-    bl_idname = "glaze.create_auto_brush"
+    bl_idname = "gloss.create_auto_brush"
     bl_label = "Add Brush"
     brush_name: bpy.props.StringProperty(name="Name")
     
@@ -414,9 +418,9 @@ class GLAZE_OT_create_auto_brushes(bpy.types.Operator):
         return {'FINISHED'}
 
 
-class GLAZE_OT_create_ref_brushes(bpy.types.Operator):
+class GLOSS_OT_create_ref_brushes(bpy.types.Operator):
     """Create New Reference Type Brush"""
-    bl_idname = "glaze.create_ref_brush"
+    bl_idname = "gloss.create_ref_brush"
     bl_label = "Add Brush"
     
     brush_name: bpy.props.StringProperty(name="Name")
@@ -479,9 +483,9 @@ class GLAZE_OT_create_ref_brushes(bpy.types.Operator):
         return {'FINISHED'}
 
 
-class GLAZE_OT_SetBrush(bpy.types.Operator):
+class GLOSS_OT_SetBrush(bpy.types.Operator):
     """Set the active brush used for fill requests."""
-    bl_idname = "glaze.set_brush"
+    bl_idname = "gloss.set_brush"
     bl_label = "Set Brush"
 
     brush_name: bpy.props.StringProperty(name="Name")
@@ -491,20 +495,20 @@ class GLAZE_OT_SetBrush(bpy.types.Operator):
         context.scene.current_brush = self.brush_name
         return {"FINISHED"}
 
-class GLAZE_OT_ClearBrushLib(bpy.types.Operator):
+class GLOSS_OT_ClearBrushLib(bpy.types.Operator):
     """Clear the in-memory brush library for the current scene."""
-    bl_idname = "glaze.clear_brush_lib"
+    bl_idname = "gloss.clear_brush_lib"
     bl_label = "Clear Brush Library"
 
     def execute(self, context):
         context.scene.current_brush = ""
-        context.scene.glaze_brushes.clear()
+        context.scene.gloss_brushes.clear()
         self.report({'INFO'}, f"Clear All Brushes")
         return {"FINISHED"}
 
 
-class GLAZE_OT_RefreshBrushLib(bpy.types.Operator):
-    """Rescan the brushes folder on disk and sync ``scene.glaze_brushes``.
+class GLOSS_OT_RefreshBrushLib(bpy.types.Operator):
+    """Rescan the brushes folder on disk and sync ``scene.gloss_brushes``.
 
     Adds an entry for every ``<brushes_folder>/<name>/icon.png`` not already
     in the library, and prunes entries whose icon no longer exists on disk.
@@ -512,12 +516,12 @@ class GLAZE_OT_RefreshBrushLib(bpy.types.Operator):
     its property defaults for entries discovered on disk, since those fields
     aren't persisted alongside the icon.
     """
-    bl_idname = "glaze.refresh_brush_lib"
+    bl_idname = "gloss.refresh_brush_lib"
     bl_label = "Refresh Brush Library"
 
     def execute(self, context):
         scene = context.scene
-        folder = scene.glaze_config.brushes_folder
+        folder = scene.gloss_config.brushes_folder
         if not folder or not os.path.isdir(bpy.path.abspath(folder)):
             self.report({'ERROR'}, "Brushes folder is not set or does not exist")
             return {'CANCELLED'}
@@ -529,30 +533,30 @@ class GLAZE_OT_RefreshBrushLib(bpy.types.Operator):
             if os.path.isdir(brush_dir) and os.path.isfile(os.path.join(brush_dir, "icon.png")):
                 on_disk.add(entry)
 
-        in_memory = {b.name for b in scene.glaze_brushes}
+        in_memory = {b.name for b in scene.gloss_brushes}
 
         for stale in list(in_memory - on_disk):
-            remove_item_by_name(scene.glaze_brushes, stale)
+            remove_item_by_name(scene.gloss_brushes, stale)
             if scene.current_brush == stale:
                 scene.current_brush = ""
 
         added = 0
         for name in sorted(on_disk - in_memory):
-            brush = scene.glaze_brushes.add()
+            brush = scene.gloss_brushes.add()
             brush.name = name
             added += 1
 
         removed = len(in_memory - on_disk)
         self.report(
             {'INFO'},
-            f"Brush library refreshed (+{added} / -{removed}, total {len(scene.glaze_brushes)})",
+            f"Brush library refreshed (+{added} / -{removed}, total {len(scene.gloss_brushes)})",
         )
         return {'FINISHED'}
 
     
-class GLAZE_OT_save_brush(bpy.types.Operator):
+class GLOSS_OT_save_brush(bpy.types.Operator):
     """Ask the server to persist a named brush."""
-    bl_idname = "glaze.save_brush"
+    bl_idname = "gloss.save_brush"
     bl_label = "Save Brush"
 
     brush_name: bpy.props.StringProperty()
@@ -574,24 +578,24 @@ def remove_item_by_name(collection, name):
             return True
     return False
 
-class GLAZE_OT_remove_brush(bpy.types.Operator):
+class GLOSS_OT_remove_brush(bpy.types.Operator):
     """Remove a brush entry from the scene collection."""
-    bl_idname = "glaze.remove_brush"
+    bl_idname = "gloss.remove_brush"
     bl_label = "Remove Brush"
     bl_options = {'UNDO'}
 
     brush_name: bpy.props.StringProperty()
 
     def execute(self, context):
-        remove_item_by_name(context.scene.glaze_brushes, self.brush_name)
+        remove_item_by_name(context.scene.gloss_brushes, self.brush_name)
         return {'FINISHED'}
 
 
 ################################## Texture Operators ####################################
 
-class GLAZE_OT_FillTexture(bpy.types.Operator):
+class GLOSS_OT_FillTexture(bpy.types.Operator):
     """Send a texture generation request for the selected faces."""
-    bl_idname = "glaze.fill"
+    bl_idname = "gloss.fill"
     bl_label = "Generate Texture"
     bl_options = {'REGISTER', 'UNDO'} 
 
@@ -611,9 +615,9 @@ class GLAZE_OT_FillTexture(bpy.types.Operator):
         return {'FINISHED'}
 
 
-class GLAZE_OT_ShowFaceIds(bpy.types.Operator):
+class GLOSS_OT_ShowFaceIds(bpy.types.Operator):
     """Copy a comma-separated list of the selected face IDs to the clipboard."""
-    bl_idname = "glaze.show_face_ids"
+    bl_idname = "gloss.show_face_ids"
     bl_label = "Show Face IDs"
     bl_options = {'REGISTER'}
 
@@ -634,9 +638,9 @@ class GLAZE_OT_ShowFaceIds(bpy.types.Operator):
         return {'FINISHED'}
 
 
-class GLAZE_OT_ClearAllPaintTexture(bpy.types.Operator):
+class GLOSS_OT_ClearAllPaintTexture(bpy.types.Operator):
     """Clear the entire active paint texture."""
-    bl_idname = "glaze.clear_all_texture"
+    bl_idname = "gloss.clear_all_texture"
     bl_label = "Clear All Texture"
     bl_options = {'REGISTER', 'UNDO'} 
     
@@ -651,9 +655,9 @@ class GLAZE_OT_ClearAllPaintTexture(bpy.types.Operator):
         return {"FINISHED"}
 
         
-class GLAZE_OT_ClearPaintTexture(bpy.types.Operator):
+class GLOSS_OT_ClearPaintTexture(bpy.types.Operator):
     """Send a clear request for the selected faces."""
-    bl_idname = "glaze.clear_texture"
+    bl_idname = "gloss.clear_texture"
     bl_label = "Clear Selected Face Texture"
     bl_options = {'REGISTER', 'UNDO'} 
     
@@ -673,9 +677,9 @@ class GLAZE_OT_ClearPaintTexture(bpy.types.Operator):
         return {'FINISHED'}
 
         
-class GLAZE_OT_Undo_Fill(bpy.types.Operator):
+class GLOSS_OT_Undo_Fill(bpy.types.Operator):
     """Undo Fill Operation, you can only consecutively undo twice"""
-    bl_idname = "glaze.undo_texture"
+    bl_idname = "gloss.undo_texture"
     bl_label = "Undo Fill"
     bl_options = {'REGISTER', 'UNDO'} 
     
@@ -698,9 +702,9 @@ class GLAZE_OT_Undo_Fill(bpy.types.Operator):
         return {"FINISHED"}
         
 
-class GLAZE_OT_show_brush_menu(bpy.types.Operator):
+class GLOSS_OT_show_brush_menu(bpy.types.Operator):
     """Open the context menu for a brush library entry."""
-    bl_idname = "glaze.show_brush_menu"
+    bl_idname = "gloss.show_brush_menu"
     bl_label = "Show Brush Menu"
 
     brush_name: bpy.props.StringProperty()
@@ -721,24 +725,24 @@ class GLAZE_OT_show_brush_menu(bpy.types.Operator):
         layout = menu.layout
         
         layout.operator(
-            "glaze.set_brush",
+            "gloss.set_brush",
             icon='FILE_TICK'
         ).brush_name = self.brush_name
 
         layout.operator(
-            "glaze.save_brush",
+            "gloss.save_brush",
             icon='FILE_TICK'
         ).brush_name = self.brush_name
 
         layout.operator(
-            "glaze.remove_brush",
+            "gloss.remove_brush",
             icon='TRASH'
         ).brush_name = self.brush_name
 
 
-class GLAZE_OT_Purge(bpy.types.Operator):
+class GLOSS_OT_Purge(bpy.types.Operator):
     """Remove duplicate datablocks (.001, .002, ...) and their related images"""
-    bl_idname = "glaze.purge"
+    bl_idname = "gloss.purge"
     bl_label = "Purge Duplicates"
     bl_options = {'REGISTER', 'UNDO'}
 
@@ -752,9 +756,9 @@ class GLAZE_OT_Purge(bpy.types.Operator):
         return {'FINISHED'}
 
 
-class GLAZE_OT_ReloadAddon(bpy.types.Operator):
+class GLOSS_OT_ReloadAddon(bpy.types.Operator):
     """Reload all Blender scripts (useful during development)"""
-    bl_idname = "glaze.glaze_reload_addon"
+    bl_idname = "gloss.gloss_reload_addon"
     bl_label = "🔄 Reload Add-on"
 
     def execute(self, context):

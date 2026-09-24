@@ -10,6 +10,8 @@ import torch, torchvision
 import cv2
 import re
 
+from .config import relativize_new_images
+
 
 def set_view_center(obj, area):
     """Center a 3D View area on an object."""
@@ -30,7 +32,7 @@ def base_name(name):
 SUPPORTED_MESH_EXTS = {".obj", ".gltf", ".glb"}
 
 
-def load_mesh(mesh_path, name="GlazeMesh", remove_existing=False):
+def load_mesh(mesh_path, name="GlossMesh", remove_existing=False):
     """Import an OBJ/glTF/GLB mesh, normalize it, rename it, and return the object.
 
     For glTF/GLB scenes that contain multiple mesh parts (and optionally
@@ -65,11 +67,15 @@ def load_mesh(mesh_path, name="GlazeMesh", remove_existing=False):
         if name in bpy.data.objects:
             bpy.data.objects.remove(bpy.data.objects[name], do_unlink=True)
     existing_objs = set(bpy.data.objects)
+    existing_images = set(bpy.data.images)
 
     if ext == ".obj":
         bpy.ops.wm.obj_import(filepath=str(mesh_path))
     else:  # .gltf / .glb
         bpy.ops.import_scene.gltf(filepath=str(mesh_path))
+    # The OBJ importer records absolute texture paths (glTF packs and relativizes
+    # on its own). Rewrite them now so a saved session travels with its folder.
+    relativize_new_images(existing_images)
 
     imported_objs = [obj for obj in bpy.data.objects if obj not in existing_objs]
     mesh_objs = [obj for obj in imported_objs if obj.type == "MESH"]
@@ -345,6 +351,7 @@ def apply_texture(obj, image_path, suffix=""):
         # newly loaded pixels. If the file's resolution doesn't match the
         # configured paint canvas size, resize via PIL on disk before load.
         loaded = bpy.data.images.load(image_path)
+        relativize_new_images({i for i in bpy.data.images if i is not loaded})
         src_w, src_h = loaded.size[0], loaded.size[1]
         if (src_w, src_h) != (width, height):
             buf = np.empty(src_w * src_h * 4, dtype=np.float32)

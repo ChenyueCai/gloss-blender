@@ -12,8 +12,8 @@ import harness  # noqa: E402
 
 harness.install()
 
-from glaze_blender import protocol  # noqa: E402
-from glaze_blender.utils import io  # noqa: E402
+from gloss_blender import protocol  # noqa: E402
+from gloss_blender.utils import io  # noqa: E402
 
 SERVER_IO = (
     pathlib.Path(__file__).resolve().parents[2]

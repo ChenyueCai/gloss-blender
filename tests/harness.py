@@ -1,6 +1,6 @@
 """Import the add-on package headlessly, with Blender stubbed out.
 
-The add-on directory is named ``glaze-blender``, which is not a valid Python
+The add-on directory is named ``gloss-blender``, which is not a valid Python
 identifier, and its ``__init__.py`` registers Blender classes on import. So we
 bind a synthetic package whose ``__path__`` points at the directory without
 executing ``__init__.py``, letting individual modules be imported by their
@@ -12,7 +12,7 @@ import sys
 import types
 
 ADDON_DIR = pathlib.Path(__file__).resolve().parent.parent
-PACKAGE = "glaze_blender"
+PACKAGE = "gloss_blender"
 
 
 def _stub_bpy():
@@ -41,6 +41,15 @@ def _stub_bpy():
 
     app = types.ModuleType("bpy.app")
     app.timers = _Timers()
+    # bpy.app.handlers -- plain lists, and a ``persistent`` decorator that is
+    # the identity, exactly as Blender's behaves for our purposes.
+    handlers = types.ModuleType("bpy.app.handlers")
+    handlers.load_post = []
+    handlers.save_pre = []
+    handlers.save_post = []
+    handlers.persistent = lambda fn: fn
+    app.handlers = handlers
+    sys.modules["bpy.app.handlers"] = handlers
     bpy.app = app
     sys.modules["bpy.app"] = app
     bpy.data = types.SimpleNamespace(images=[])
@@ -134,7 +143,7 @@ def real_websockets_available():
 
     existing = sys.modules.get("websockets")
     if existing is not None:
-        return not getattr(existing, "__glaze_stub__", False)
+        return not getattr(existing, "__gloss_stub__", False)
     try:
         return importlib.util.find_spec("websockets") is not None
     except (ImportError, ValueError):
@@ -142,7 +151,7 @@ def real_websockets_available():
 
 
 def install():
-    """Make ``glaze_blender.*`` importable. Idempotent.
+    """Make ``gloss_blender.*`` importable. Idempotent.
 
     The real ``websockets`` package is always preferred when installed, so
     test-module import order cannot leave a stub in ``sys.modules`` that a
@@ -153,7 +162,7 @@ def install():
     _stub_blender_extras()
     if "websockets" not in sys.modules and not real_websockets_available():
         stub = _stub_websockets()
-        stub.__glaze_stub__ = True
+        stub.__gloss_stub__ = True
         sys.modules["websockets"] = stub
     if PACKAGE not in sys.modules:
         pkg = types.ModuleType(PACKAGE)

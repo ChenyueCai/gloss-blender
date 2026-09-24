@@ -30,8 +30,8 @@ if HAVE_WEBSOCKETS:
     import asyncio
     import websockets
 
-from glaze_blender import protocol  # noqa: E402
-from glaze_blender.utils import io  # noqa: E402
+from gloss_blender import protocol  # noqa: E402
+from gloss_blender.utils import io  # noqa: E402
 
 ADDON_DIR = pathlib.Path(__file__).resolve().parent.parent
 TEXTURE_SIZE = 256
@@ -41,7 +41,7 @@ def load_mock_server():
     """Import ``mock_server.py`` by path (repo root is not a package)."""
     import importlib.util
     spec = importlib.util.spec_from_file_location(
-        "glaze_mock_server", ADDON_DIR / "mock_server.py")
+        "gloss_mock_server", ADDON_DIR / "mock_server.py")
     module = importlib.util.module_from_spec(spec)
     sys.path.insert(0, str(ADDON_DIR))
     spec.loader.exec_module(module)
@@ -86,7 +86,7 @@ class TestLoopback(unittest.TestCase):
         assert cls.port, "mock server failed to bind (see traceback above)"
 
     def setUp(self):
-        from glaze_blender.client import WSClient
+        from gloss_blender.client import WSClient
         self.client = WSClient()
         self.client.stop()
         self.client.receive_queue = []

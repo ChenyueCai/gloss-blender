@@ -1,4 +1,4 @@
-"""Structural assertions on the real Glaze server.
+"""Structural assertions on the real Gloss server.
 
 ``glaze_interactive.server`` cannot be imported here -- it needs CUDA, kaolin
 and a loaded checkpoint. These tests parse it instead, and assert the

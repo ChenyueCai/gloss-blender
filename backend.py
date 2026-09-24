@@ -22,6 +22,7 @@ from .protocol import (
     STATE_SYNCED,
     STATE_SYNCING,
 )
+from .utils.config import register_config_handlers, unregister_config_handlers
 from .utils.io import (
     ChunkAssembler,
     decode_pixels,
@@ -39,7 +40,9 @@ from .utils.mesh import (
     update_texture,
 )
 
-#: Seconds to wait for a server response before giving up on a fill.
+#: Seconds of silence from the server before an in-flight fill is failed.
+#: Refreshed by every sign of life, so a slow but talkative server is never
+#: killed for taking its time.
 TEXTURE_TIMEOUT_S = 120
 
 _TEXTURE_STATE = {
@@ -52,6 +55,111 @@ _TEXTURE_STATE = {
     # "fill" | "clear" -- decides whether the result must be pushed back.
     "operation": None,
 }
+
+#: Seconds of silence before an in-flight brush creation is failed.
+BRUSH_TIMEOUT_S = 300
+
+
+def _read_session(field):
+    """Read one field of the scene's session state, or ``None`` if unavailable."""
+    try:
+        return getattr(bpy.context.scene.gloss_session, field)
+    except Exception:
+        # No scene yet (registration, headless import), or the property is gone.
+        return None
+
+
+class _BusyGuard:
+    """Makes a published ``preparing`` a promise that always resolves.
+
+    The panel greys out whole rows while a state reads ``preparing``
+    (``ui_panel.py``), so any path that publishes it must also guarantee that
+    something takes it away again. Rather than ask each of those paths to
+    remember, the guarantee hangs off the publisher: the guard arms on the
+    transition into ``preparing`` and a timer keyed off the *published* value --
+    not off whatever private bookkeeping happens to be in flight -- carries it
+    to a terminal state.
+
+    This is the bug the class exists to prevent: the fill watchdog used to key
+    off ``_TEXTURE_STATE["active"]``, so a ``preparing`` published without a
+    texture update behind it (a stray ``fill_status`` arriving after the fill
+    had already finished) had nothing left to end it, and every button in the
+    Generation panel stayed greyed out for the rest of the session.
+    """
+
+    def __init__(self, name, field, on_timeout, timeout_s):
+        self.name = name
+        self.field = field
+        self.timeout_s = timeout_s
+        self._on_timeout = on_timeout
+        self.deadline = None
+        #: Last published state, for when the scene property cannot be read.
+        self.mirror = None
+        # One bound method for the guard's lifetime: bpy.app.timers matches
+        # callbacks by identity, and ``self._tick`` is a fresh object per access.
+        self.tick = self._tick
+
+    def publish(self, state):
+        """Mirror a published state, then arm or disarm the deadline."""
+        self.mirror = state
+        if state == STATE_PREPARING:
+            self.arm()
+        else:
+            self.deadline = None
+
+    def arm(self):
+        """Start, or push back, the deadline. Every sign of life calls this."""
+        self.deadline = time.time() + self.timeout_s
+        if not bpy.app.timers.is_registered(self.tick):
+            bpy.app.timers.register(self.tick, persistent=True)
+
+    def published_state(self):
+        """What the panel actually shows, falling back to the mirror.
+
+        The scene wins whenever it is readable, so loading a file -- which
+        resets the property to its default -- retires the guard instead of
+        stamping the previous file's timeout onto the new one.
+        """
+        state = _read_session(self.field)
+        return self.mirror if state is None else state
+
+    def _tick(self):
+        """Timer body. Returning ``None`` unregisters it."""
+        if self.published_state() != STATE_PREPARING:
+            self.deadline = None
+            return None
+        if self.deadline is None:
+            # Busy with no deadline: start the countdown rather than trust a
+            # state nothing accounted for.
+            self.deadline = time.time() + self.timeout_s
+            return 1.0
+        if time.time() < self.deadline:
+            return 1.0
+        print(f"[{self.name}] timed out waiting for server response")
+        self._on_timeout()
+        return None
+
+    def reset(self):
+        """Forget the state and stop ticking. Used at add-on teardown."""
+        self.deadline = None
+        self.mirror = None
+        if bpy.app.timers.is_registered(self.tick):
+            bpy.app.timers.unregister(self.tick)
+
+
+_FILL_GUARD = _BusyGuard(
+    "TextureUpdate",
+    "fill_state",
+    lambda: finish_texture_updates(STATE_ERROR, "timed out waiting for server"),
+    TEXTURE_TIMEOUT_S,
+)
+
+_BRUSH_GUARD = _BusyGuard(
+    "CreateBrush",
+    "brush_state",
+    lambda: set_brush_state(STATE_ERROR, "timed out waiting for server"),
+    BRUSH_TIMEOUT_S,
+)
 
 
 def tag_redraw_all():
@@ -70,31 +178,49 @@ def tag_redraw_all():
 
 
 def set_fill_state(state, message=""):
-    """Publish fill progress to the panel and request a repaint."""
+    """Publish fill progress to the panel and request a repaint.
+
+    Every transition is mirrored into ``_FILL_GUARD`` and arms or disarms the
+    watchdog, which is what stops the panel from latching. The watchdog used to
+    key off ``_TEXTURE_STATE["active"]``, so a ``preparing`` published without
+    an in-flight texture update behind it -- a stray ``fill_status`` arriving
+    after the fill already finished, say -- had nothing left to end it and
+    greyed out every button in the Generation panel for the rest of the
+    session.
+    """
     try:
-        session = bpy.context.scene.glaze_session
+        session = bpy.context.scene.gloss_session
         session.fill_state = state
         session.fill_message = message
     except Exception:
+        # No scene yet. The guard's mirror still drives the watchdog, so the
+        # state stays recoverable either way.
         pass
+    _FILL_GUARD.publish(state)
     tag_redraw_all()
 
 
 def set_brush_state(state, message=""):
-    """Publish brush-creation progress to the panel and request a repaint."""
+    """Publish brush-creation progress to the panel and request a repaint.
+
+    Guarded like the fill state: the Add Brush row greys out on ``preparing``,
+    and ``on_brush_status`` publishes that straight from the server, so a
+    trailing progress message could otherwise latch the row shut.
+    """
     try:
-        session = bpy.context.scene.glaze_session
+        session = bpy.context.scene.gloss_session
         session.brush_state = state
         session.brush_message = message
     except Exception:
         pass
+    _BRUSH_GUARD.publish(state)
     tag_redraw_all()
 
 
 def set_sync_state(state, message=""):
     """Publish client/server texture agreement to the panel."""
     try:
-        session = bpy.context.scene.glaze_session
+        session = bpy.context.scene.gloss_session
         session.sync_state = state
         session.sync_message = message
     except Exception:
@@ -258,9 +384,25 @@ def on_texture_chunk(payload):
 
 
 def on_fill_status(payload):
-    """Surface server-side fill progress in the panel."""
+    """Surface server-side fill progress in the panel.
+
+    Progress only means something while this side is tracking a fill. The
+    server sends one last ``fill_status`` (its own ``ready`` stage) *after* the
+    final texture chunk, by which time ``on_texture_chunk`` has already
+    finished the fill and published ``ready``. Writing that trailing message
+    back as ``preparing`` re-greyed Generate and Clear Faces after every
+    successful generate -- for 120 s until the watchdog fired, or for good if
+    the file was saved in that window. So: nothing in flight, nothing to show;
+    and completion is decided by the chunk handler, never by the server's word.
+    """
+    if not _TEXTURE_STATE["active"]:
+        return
     data = payload.get("data") or {}
     stage = data.get("stage", "working")
+    if stage == STATE_READY:
+        # Sign of life, but not completion: chunks may still be on the wire.
+        _FILL_GUARD.arm()
+        return
     current, total = data.get("current"), data.get("total")
     if current is not None and total:
         set_fill_state(STATE_PREPARING, f"{stage} {current}/{total}")
@@ -288,7 +430,7 @@ def on_server_error(payload):
     data = payload.get("data") or {}
     message = data.get("message", "server error")
     context_type = data.get("context", "")
-    print(f"[glaze] server error during {context_type!r}: {message}")
+    print(f"[gloss] server error during {context_type!r}: {message}")
     if context_type in {"fill", "clear_face"} or _TEXTURE_STATE["active"]:
         finish_texture_updates(STATE_ERROR, message)
     if context_type == "add_brush":
@@ -302,29 +444,13 @@ def on_status(payload):
     data = payload.get("data") or {}
     message = data.get("message", "")
     if message:
-        print("[glaze]", message)
+        print("[gloss]", message)
 
 
 def finish_texture_updates(state=STATE_READY, message=""):
     """Tear down the in-flight fill and publish its terminal state."""
     reset_texture_state()
     set_fill_state(state, message)
-
-
-def _texture_watchdog():
-    """Fail an in-flight fill that the server never finished.
-
-    Replaces the timeout that used to live inside the polling loop; the router
-    is event-driven, so a silent server would otherwise hang the panel forever.
-    """
-    if not _TEXTURE_STATE["active"]:
-        return None
-    started = _TEXTURE_STATE["start_time"]
-    if started and time.time() - started > TEXTURE_TIMEOUT_S:
-        print("[TextureUpdate] timed out waiting for server response")
-        finish_texture_updates(STATE_ERROR, "timed out waiting for server")
-        return None
-    return 1.0
 
 
 def start_texture_updates(obj, soft_merge=True, operation="fill"):
@@ -338,10 +464,15 @@ def start_texture_updates(obj, soft_merge=True, operation="fill"):
         operation: ``"fill"`` or ``"clear"``. A fill is composited locally, so
             its result is pushed back to the server; a clear is adopted
             verbatim, so both sides already agree.
+
+    Raises:
+        RuntimeError: If a texture update is already in flight.
     """
     if _TEXTURE_STATE["active"]:
-        print("[TextureUpdate] already running")
-        return
+        # Callers send only after arming, so this is the last line of defence
+        # against a second request reaching the server untracked and having its
+        # chunks land on the previous request's assembler.
+        raise RuntimeError("A texture update is already running")
 
     _TEXTURE_STATE.update(
         {
@@ -354,13 +485,52 @@ def start_texture_updates(obj, soft_merge=True, operation="fill"):
             "operation": operation,
         }
     )
+    # Publishing "preparing" arms the watchdog; nothing else has to remember to.
     set_fill_state(STATE_PREPARING, "waiting for server")
-    if not bpy.app.timers.is_registered(_texture_watchdog):
-        bpy.app.timers.register(_texture_watchdog, persistent=True)
+
+
+#: Progress properties on ``Scene.gloss_session`` and the value that means
+#: "nothing in flight". They are scene data, so Blender saves them into the
+#: .blend along with everything else.
+_TRANSIENT_STATES = (
+    ("fill_state", "fill_message"),
+    ("brush_state", "brush_message"),
+    ("sync_state", "sync_message"),
+)
+
+
+@bpy.app.handlers.persistent
+def reset_transient_state_on_load(*_args):
+    """Forget saved progress when a file is loaded.
+
+    ``fill_state`` and friends are scene properties, so a file saved while a
+    row read ``preparing`` reopens reading ``preparing`` -- with no request in
+    flight and no watchdog armed, because the guard only arms when a state is
+    published during the session. That locked the whole Generation panel until
+    Blender was restarted. After a load nothing can be in flight, by
+    definition, so every row starts over at ``idle``.
+    """
+    reset_texture_state()
+    _FILL_GUARD.reset()
+    _BRUSH_GUARD.reset()
+    for scene in getattr(bpy.data, "scenes", ()):
+        session = getattr(scene, "gloss_session", None)
+        if session is None:
+            continue
+        for state_field, message_field in _TRANSIENT_STATES:
+            try:
+                setattr(session, state_field, "idle")
+                setattr(session, message_field, "")
+            except Exception:
+                pass
+    tag_redraw_all()
 
 
 def register_backend_handlers():
     """Wire backend consumers onto the client router. Called at add-on register."""
+    if reset_transient_state_on_load not in bpy.app.handlers.load_post:
+        bpy.app.handlers.load_post.append(reset_transient_state_on_load)
+    register_config_handlers()
     ws_client.register_handler(MSG_TEXTURE_CHUNK, on_texture_chunk)
     ws_client.register_handler(MSG_FILL_STATUS, on_fill_status)
     ws_client.register_handler(MSG_BRUSH_STATUS, on_brush_status)
@@ -370,7 +540,13 @@ def register_backend_handlers():
 
 
 def unregister_backend_handlers():
-    """Remove backend consumers from the client router."""
+    """Remove backend consumers from the client router and stop the watchdog."""
+    if reset_transient_state_on_load in bpy.app.handlers.load_post:
+        bpy.app.handlers.load_post.remove(reset_transient_state_on_load)
+    unregister_config_handlers()
+    reset_texture_state()
+    _FILL_GUARD.reset()
+    _BRUSH_GUARD.reset()
     ws_client.unregister_handler(MSG_TEXTURE_CHUNK, on_texture_chunk)
     ws_client.unregister_handler(MSG_FILL_STATUS, on_fill_status)
     ws_client.unregister_handler(MSG_BRUSH_STATUS, on_brush_status)
@@ -399,7 +575,7 @@ def load_paint_texture(context, filepath):
 
     image = apply_texture(obj, filepath, suffix="paint")
     binarize_paint_alpha(image)
-    context.scene.glaze_session.loaded_paint_texture = filepath
+    context.scene.gloss_session.loaded_paint_texture = filepath
 
     if ws_client.is_connected:
         push_texture_to_server(context, reason="after loading texture")
@@ -484,7 +660,7 @@ def push_texture_to_server(context, reason=""):
         return True
     except RuntimeError as exc:
         set_sync_state(STATE_ERROR, str(exc))
-        print(f"[glaze] texture push failed ({reason}): {exc}")
+        print(f"[gloss] texture push failed ({reason}): {exc}")
         return False
 
 
@@ -503,7 +679,8 @@ def send_fill_request(context):
         list[int]: Face indices sent with the request.
 
     Raises:
-        RuntimeError: If no paint mesh is loaded or the server is disconnected.
+        RuntimeError: If no paint mesh is loaded, the server is disconnected,
+            or a texture update is already in flight.
     """
     obj = context.scene.current_paint_mesh
     if obj is None:
@@ -524,8 +701,11 @@ def send_fill_request(context):
         "dilate": context.scene.dilate,
         "syncmvd": context.scene.syncmvd,
     }
-    ws_client.send({"type": "fill", "data": fill_info})
+    # Arm first, send second. The old order put the request on the wire before
+    # start_texture_updates() had a chance to refuse a busy state, so a second
+    # generate reached the server with nothing on this side tracking its reply.
     start_texture_updates(obj, soft_merge=context.scene.soft_add, operation="fill")
+    ws_client.send({"type": "fill", "data": fill_info})
     set_fill_state(STATE_PREPARING, f"generating ({len(target_faces)} faces)")
     return target_faces
 
@@ -540,11 +720,17 @@ def send_clear_request(context):
         list[int]: Face indices sent with the request.
 
     Raises:
-        RuntimeError: If no paint mesh is loaded or the server is disconnected.
+        RuntimeError: If no paint mesh is loaded, the server is disconnected,
+            or a texture update is already in flight.
     """
     obj = context.scene.current_paint_mesh
     if obj is None:
         raise RuntimeError("Load a paint mesh before clearing texture regions")
+    # The docstring always promised this check; without it a clear issued while
+    # disconnected sent into the void and left the panel waiting on a reply that
+    # could never arrive.
+    if not ws_client.is_connected:
+        raise RuntimeError("Server not connected")
 
     target_faces = collect_selected_face_indices(obj)
     clear_info = {
@@ -552,8 +738,8 @@ def send_clear_request(context):
         "mesh_name": base_name(obj.name),
         "high_res": context.scene.update_texture_4k,
     }
-    ws_client.send({"type": "clear_face", "data": clear_info})
     start_texture_updates(obj, soft_merge=False, operation="clear")
+    ws_client.send({"type": "clear_face", "data": clear_info})
     set_fill_state(STATE_PREPARING, f"clearing ({len(target_faces)} faces)")
     return target_faces
 

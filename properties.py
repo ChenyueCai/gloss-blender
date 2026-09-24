@@ -3,7 +3,7 @@ from bpy.types import PropertyGroup, Panel, Operator
 import bpy.utils.previews
 import bpy
 
-class GlazeConfig(bpy.types.PropertyGroup):
+class GlossConfig(bpy.types.PropertyGroup):
     """Scene-level configuration paths and server settings for the add-on."""
     server_url: bpy.props.StringProperty(name="Server URL", default="ws://localhost:10017/websocket")
     mesh_folder: bpy.props.StringProperty(name="Mesh Folder", subtype='DIR_PATH', default="")
@@ -11,15 +11,15 @@ class GlazeConfig(bpy.types.PropertyGroup):
     single_views_texture_folder: bpy.props.StringProperty(name="Reference Textures", subtype='DIR_PATH', default="")
     brushes_folder: bpy.props.StringProperty(name="Brushes Folder", subtype='DIR_PATH', default="")
 
-class GlazeSingleView(bpy.types.PropertyGroup):
+class GlossSingleView(bpy.types.PropertyGroup):
     """Selected reference image metadata for the current session."""
     mesh: bpy.props.StringProperty()
     sv_id: bpy.props.IntProperty()
     image_path: bpy.props.StringProperty(name="Image", description="Select an image file", subtype='FILE_PATH')
     
     
-class GlazeBrush(bpy.types.PropertyGroup):
-    """Brush metadata stored in ``Scene.glaze_brushes``."""
+class GlossBrush(bpy.types.PropertyGroup):
+    """Brush metadata stored in ``Scene.gloss_brushes``."""
     name: bpy.props.StringProperty()
     mesh: bpy.props.StringProperty()
     sv_id: bpy.props.IntProperty()
@@ -51,8 +51,16 @@ class InferenceViewSettings(bpy.types.PropertyGroup):
     )
 
 
-class GlazeSessionState(bpy.types.PropertyGroup):
+class GlossSessionState(bpy.types.PropertyGroup):
     """Transient session state for the active paint texture workflow."""
+    session_name: bpy.props.StringProperty(
+        name="Session Name",
+        description=(
+            "Label shown at the top of the Gloss panel. Leave empty to derive it "
+            "from the .blend location, e.g. croissant/painting"
+        ),
+        default="",
+    )
     loaded_paint_texture: bpy.props.StringProperty(
         name="Paint Texture",
         subtype='FILE_PATH',

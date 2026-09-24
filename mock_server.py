@@ -1,4 +1,4 @@
-"""Minimum viable Glaze server, for testing the add-on without a GPU.
+"""Minimum viable Gloss server, for testing the add-on without a GPU.
 
 Speaks the tagged protocol in ``protocol.py``: every reply carries a ``type``
 so the add-on's router can deliver it to exactly one consumer.

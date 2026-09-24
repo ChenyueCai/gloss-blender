@@ -1,4 +1,4 @@
-Agent name: GLAZEBLAssistant
+Agent name: GLOSSBLAssistant
 
 System / Instructions:
 

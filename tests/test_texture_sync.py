@@ -20,8 +20,8 @@ import harness  # noqa: E402
 
 harness.install()
 
-from glaze_blender import backend, protocol  # noqa: E402
-from glaze_blender.utils import io  # noqa: E402
+from gloss_blender import backend, protocol  # noqa: E402
+from gloss_blender.utils import io  # noqa: E402
 
 SIZE = 2  # 2x2 RGBA keeps payloads tiny
 
@@ -104,11 +104,11 @@ class TestAutomaticSync(SyncRuleTestCase):
 class TestNoManualSyncPath(unittest.TestCase):
     def test_sync_operator_is_gone(self):
         source = (pathlib.Path(harness.ADDON_DIR) / "operators.py").read_text()
-        self.assertNotIn('bl_idname = "glaze.set_texture"', source)
+        self.assertNotIn('bl_idname = "gloss.set_texture"', source)
 
     def test_panel_has_no_sync_button(self):
         source = (pathlib.Path(harness.ADDON_DIR) / "ui_panel.py").read_text()
-        self.assertNotIn("glaze.set_texture", source)
+        self.assertNotIn("gloss.set_texture", source)
 
     def test_loading_a_texture_always_syncs(self):
         """The sync-on-load toggle is gone; loading always pushes."""

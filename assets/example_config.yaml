@@ -1,6 +1,0 @@
-server_url: ws://localhost:10017/websocket
-mesh_folder: /Users/chenyuecai/Desktop/workspace/GLOSS/interactive/data/mesh
-single_views_folder: /Users/chenyuecai/Desktop/workspace/GLOSS/interactive/data/cond_views
-single_views_texture_folder: /Users/chenyuecai/Desktop/workspace/GLOSS/interactive/data/textures_sr
-brushes_folder: /Users/chenyuecai/Desktop/workspace/GLOSS/interactive/data/brushes
-update_texture_4k: true

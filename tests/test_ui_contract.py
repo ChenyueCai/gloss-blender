@@ -68,7 +68,7 @@ def referenced(tree, target):
 
 
 def operator_ids_called(tree):
-    """Operator ids drawn by ``layout.operator("glaze.x")``."""
+    """Operator ids drawn by ``layout.operator("gloss.x")``."""
     ids = set()
     for node in ast.walk(tree):
         if (isinstance(node, ast.Call)
@@ -81,7 +81,7 @@ def operator_ids_called(tree):
 
 
 def operator_ids_declared(tree):
-    """Operator ids declared as ``bl_idname = "glaze.x"``."""
+    """Operator ids declared as ``bl_idname = "gloss.x"``."""
     ids = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.ClassDef):
@@ -146,7 +146,7 @@ class TestPanelReferences(unittest.TestCase):
             f"ui_panel draws operators that no longer exist: {missing}")
 
     def test_every_session_property_drawn_by_the_panel_exists(self):
-        declared = annotated_properties(self.properties, "GlazeSessionState")
+        declared = annotated_properties(self.properties, "GlossSessionState")
         missing = sorted(referenced(self.panel, "session") - declared)
         self.assertEqual(
             missing, [],

@@ -1,10 +1,10 @@
-# glaze-blender Messaging
+# gloss-blender Messaging
 
-WebSocket protocol between the Blender add-on and the Glaze server.
+WebSocket protocol between the Blender add-on and the Gloss server.
 
 ## Transport
 
-- **Endpoint:** `ws://localhost:10017/websocket` (configurable via `glaze_config.server_url`).
+- **Endpoint:** `ws://localhost:10017/websocket` (configurable via `gloss_config.server_url`).
 - **Client:** `WSClient` singleton in `client.py` — survives add-on reload.
 - **Threading:** an asyncio loop on a daemon thread runs `send_worker` + `receive_worker`
   (`client.py:222`, `:249`). A single `bpy.app.timers` callback, `poll_messages`
@@ -90,7 +90,7 @@ All have shape `{"type": <name>, "data": {...}}` unless noted.
 | `type` | Handler | Payload | Effect |
 |---|---|---|---|
 | `texture_chunk` | `backend.on_texture_chunk` | `view_id`, `chunk_index`, `chunk_total`, `num_views`, `dtype`, `image` | `ChunkAssembler` reassembles per view, reshapes to `(H, W, 4)`, calls `update_texture`. Progress is mirrored into the panel per chunk. |
-| `brush_icon` | one-shot handler from `operators.start_brush_listener` | `brush_name`, `dtype`, `image` (uint8 HWC, 256²) | Writes `<brushes_folder>/<brush_name>/icon.png`, registers the brush in `scene.glaze_brushes`. |
+| `brush_icon` | one-shot handler from `operators.start_brush_listener` | `brush_name`, `dtype`, `image` (uint8 HWC, 256²) | Writes `<brushes_folder>/<brush_name>/icon.png`, registers the brush in `scene.gloss_brushes`. |
 | `brush_status` | `backend.on_brush_status` | `brush_name`, `state`, `message` | Drives the Brush Library progress row. |
 | `fill_status` | `backend.on_fill_status` | `stage`, `current`, `total` | Drives the Generation progress row. |
 | `error` | `backend.on_server_error` | `message`, `context` | Clears pending state and shows the failure, instead of hanging until timeout. |

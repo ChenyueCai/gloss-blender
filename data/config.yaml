@@ -1,0 +1,9 @@
+# Example session config. Folder values are relative to this file, so the
+# add-on resolves them wherever the repository is checked out.
+# Fill the folders with `python data/download.py`.
+server_url: ws://localhost:10017/websocket
+mesh_folder: mesh
+single_views_folder: single_view
+single_views_texture_folder: texture
+brushes_folder: brush
+update_texture_4k: true
