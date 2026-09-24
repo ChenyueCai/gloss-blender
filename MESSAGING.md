@@ -31,7 +31,7 @@ handler that raises is caught and logged so it cannot stall the queue.
 delivered that nothing consumes.
 
 Type constants live in `protocol.py`, mirrored at
-`material-superres-private/glaze_interactive/protocol.py`; keep the two in sync.
+`material-superres-private/gloss_interactive/protocol.py`; keep the two in sync.
 
 > **Why this exists.** Replies used to be untagged, and two timers
 > (`poll_str_messages`, always registered at 0.2 s, and a per-brush
@@ -116,7 +116,7 @@ manual sync message or button.
 
 ## Server-side execution model
 
-`GLAZEWebSocketHandler.on_message` **yields** its handlers, so exceptions
+`GLOSSWebSocketHandler.on_message` **yields** its handlers, so exceptions
 surface and are reported to the client as `error` messages. All GPU work runs
 on `GPU_EXECUTOR`, a single-worker `ThreadPoolExecutor` — one worker keeps CUDA
 work serialized while leaving the IOLoop free:

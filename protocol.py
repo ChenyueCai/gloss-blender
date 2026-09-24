@@ -6,7 +6,7 @@ untagged and two Blender timers raced to drain a single shared inbox, which
 silently dropped brush icons (see MESSAGING.md).
 
 The server mirrors these constants in
-``material-superres-private/glaze_interactive/protocol.py``. Keep the two files
+``material-superres-private/gloss_interactive/protocol.py``. Keep the two files
 in sync; ``tests/test_protocol.py`` asserts the values match when both repos
 are checked out side by side.
 """

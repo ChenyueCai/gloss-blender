@@ -275,7 +275,7 @@ Replies the add-on understands: `texture_chunk`, `brush_icon`, `brush_status`, `
 <details>
 <summary><b>Missing information</b></summary>
 
-- The production websocket backend is not in this repository. Brush semantics and server-side fill behaviour are documented from the client contract plus the server sources under `material-superres-private/glaze_interactive/`.
+- The production websocket backend is not in this repository. Brush semantics and server-side fill behaviour are documented from the client contract plus the server sources under `material-superres-private/gloss_interactive/`.
 - Blender-side behaviour (panel repaint, no UI freeze, icon rendering) needs a manual pass in Blender against `mock_server.py`.
 - Material setup assumptions are simple: the add-on looks for a Principled BSDF and swaps the Base Color image node.
 
