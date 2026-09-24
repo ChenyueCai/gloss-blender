@@ -1,4 +1,4 @@
-<h1 align="center">GLOSS-BLENDER</h1>
+<h1 align="center">GLOSS-BLENDER 🎨</h1>
 
 <p align="center"><b>A Blender add-on for reference-based interactive texture fill</b></p>
 
