@@ -10,7 +10,6 @@ Skipped when the ``websockets`` package is unavailable; it ships with the
 add-on's Blender environment, not the cluster conda envs.
 """
 
-import json
 import pathlib
 import sys
 import threading

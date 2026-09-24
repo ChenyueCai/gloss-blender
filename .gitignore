@@ -3,6 +3,7 @@ __pycache__
 */__pycache__/*
 *.pyc
 .DS_Store
+.pytest_cache/
 .codex/
 # Example data is downloaded by data/download.py; only the config and script are tracked.
 data/*

@@ -15,29 +15,12 @@ harness.install()
 from gloss_blender import protocol  # noqa: E402
 from gloss_blender.utils import io  # noqa: E402
 
-SERVER_IO = (
-    pathlib.Path(__file__).resolve().parents[2]
-    / "material-superres-private" / "glaze_interactive" / "kaolin_tmp_io.py"
-)
-
 
 class TestChunkSizeAgreement(unittest.TestCase):
     """The 1 MB vs 10 MB divergence that split 4K textures into ~269 frames."""
 
     def test_addon_matches_protocol(self):
         self.assertEqual(io.DEFAULT_CHUNK_BYTES, protocol.DEFAULT_CHUNK_BYTES)
-
-    @unittest.skipUnless(SERVER_IO.exists(), "server repo not checked out here")
-    def test_server_matches_protocol(self):
-        text = SERVER_IO.read_text()
-        self.assertIn(
-            f"DEFAULT_CHUNK_BYTES = {protocol.DEFAULT_CHUNK_BYTES:_}", text,
-            "server chunk budget diverged from the protocol constant",
-        )
-        self.assertNotIn(
-            "chunk_size: int = 10_000_00)", text,
-            "the dropped-zero chunk size is back",
-        )
 
 
 class TestPixelCodec(unittest.TestCase):

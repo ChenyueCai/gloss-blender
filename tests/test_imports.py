@@ -25,8 +25,6 @@ RUNTIME_MODULES = [
     "utils.io",
     "utils.image",
     "utils.config",
-    "utils.brush",
-    "utils.cameras",
     "utils.mesh",
 ]
 

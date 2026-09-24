@@ -25,8 +25,6 @@ from .protocol import (
 from .utils.config import register_config_handlers, unregister_config_handlers
 from .utils.io import (
     ChunkAssembler,
-    decode_pixels,
-    from_binary,
     send_large_image,
     to_binary,
 )
@@ -34,7 +32,6 @@ from .utils.mesh import (
     apply_texture,
     base_name,
     binarize_paint_alpha,
-    clear_faces_local,
     clear_texture,
     get_current_texture,
     update_texture,

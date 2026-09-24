@@ -11,8 +11,7 @@ config resolve without editing:
     metas/<name>/         viewNNNN.yml             reference cameras and prompts
     brush/                brush presets
 
-The dataset is private. Log in once with ``hf auth login`` or export a token
-as ``HF_TOKEN`` before running this script.
+The dataset is public; no Hugging Face login is needed.
 """
 
 import argparse
@@ -51,7 +50,7 @@ def main():
     except Exception as exc:  # noqa: BLE001 - surface auth and network errors plainly
         sys.exit(
             f"Download failed: {exc}\n"
-            "The dataset is private: run `hf auth login` or set HF_TOKEN, then retry."
+            "Check the network connection and retry."
         )
     print(f"Downloaded {REPO_ID} to {path}")
     print("Load data/config.yaml from the Gloss panel to use it.")

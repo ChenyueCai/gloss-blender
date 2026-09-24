@@ -4,9 +4,8 @@ import bmesh
 from .backend import clear_all_texture, collect_selected_face_indices, load_paint_texture, purge_duplicates, send_clear_request, send_fill_request
 from .utils.config import load_gloss_config_from_yaml
 from .utils.mesh import load_mesh, apply_texture, undo_texture, \
-    is_normal_connected, disconnect_normal, connect_normal, set_view_center, base_name, \
-    strip_to_diffuse_normal
-from .utils.io import decode_pixels, from_binary
+    set_view_center, base_name, strip_to_diffuse_normal
+from .utils.io import decode_pixels
 from .client import ws_client
 from .protocol import (
     DTYPE_UINT8,
@@ -19,7 +18,6 @@ from .backend import (
     BRUSH_TIMEOUT_S,
     push_texture_to_server,
     set_brush_state,
-    tag_redraw_all,
 )
 
 import os
@@ -438,16 +436,9 @@ class GLOSS_OT_create_ref_brushes(bpy.types.Operator):
             self.report({'ERROR'}, "Reference mesh must be in Edit Mode")
             return {'CANCELLED'}
 
-        context.scene.reference_faces.clear()
         bm = bmesh.from_edit_mesh(obj.data)
         bm.faces.ensure_lookup_table()
-
-        self.reference_faces = []
-        for f in bm.faces:
-            if f.select:
-                entry = context.scene.reference_faces.add()
-                entry.index = f.index
-                self.reference_faces.append(f.index)
+        self.reference_faces = [f.index for f in bm.faces if f.select]
 
         if not self.reference_faces:
             self.report(
@@ -601,15 +592,10 @@ class GLOSS_OT_FillTexture(bpy.types.Operator):
 
     def execute(self, context):
         try:
-            target_faces = send_fill_request(context)
+            send_fill_request(context)
         except RuntimeError as exc:
             self.report({'ERROR'}, str(exc))
             return {'CANCELLED'}
-
-        context.scene.target_faces.clear()
-        for face_index in target_faces:
-            entry = context.scene.target_faces.add()
-            entry.index = face_index
 
         self.report({'INFO'}, "Texture generation request sent")
         return {'FINISHED'}
@@ -663,15 +649,10 @@ class GLOSS_OT_ClearPaintTexture(bpy.types.Operator):
     
     def execute(self, context):
         try:
-            target_faces = send_clear_request(context)
+            send_clear_request(context)
         except RuntimeError as exc:
             self.report({'ERROR'}, str(exc))
             return {'CANCELLED'}
-
-        context.scene.target_faces.clear()
-        for face_index in target_faces:
-            entry = context.scene.target_faces.add()
-            entry.index = face_index
 
         self.report({'INFO'}, "Clear request sent to server")
         return {'FINISHED'}
@@ -765,23 +746,3 @@ class GLOSS_OT_ReloadAddon(bpy.types.Operator):
         bpy.ops.script.reload()
         self.report({'INFO'}, "Scripts reloaded successfully!")
         return {'FINISHED'}
-
-
-class MATERIAL_OT_toggle_normal(bpy.types.Operator):
-    """Toggle Normal Map Connection"""
-    bl_idname = "material.toggle_normal_map"
-    bl_label = "Toggle Normal Map"
-
-    def execute(self, context):
-        mat = context.object.active_material
-        if not mat:
-            self.report({"WARNING"}, "No active material")
-            return {'CANCELLED'}
-
-        if is_normal_connected(mat):
-            disconnect_normal(mat)
-        else:
-            connect_normal(mat)
-
-        return {'FINISHED'}
-    

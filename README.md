@@ -23,11 +23,10 @@
    python -m pip install -r requirement.txt
    ```
 
-3. Download the example dataset into `data/`. The dataset is private, so log in to Hugging Face first:
+3. Download the example dataset (about 1.6 GB) into `data/`:
 
    ```bash
    pip install huggingface_hub
-   hf auth login
    python data/download.py
    ```
 

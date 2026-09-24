@@ -1,13 +1,5 @@
 import bpy
 import os
-from pathlib import Path
-import numpy as np
-
-
-def list_images(folder_path):
-    """Return supported image files in ``folder_path`` sorted by name."""
-    folder_path = Path(folder_path)
-    return sorted([p for p in folder_path.iterdir() if p.suffix.lower() in [".png", ".jpg", ".jpeg"]])
 
 
 preview_collection = None

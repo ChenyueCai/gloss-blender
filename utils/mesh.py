@@ -4,7 +4,6 @@ import gpu
 from pathlib import Path
 import mathutils
 
-import os
 import numpy as np
 import torch, torchvision
 import cv2
@@ -161,57 +160,6 @@ def normalize_mesh(obj, normalize=True, eps=1e-6):
 
     # Return to Object Mode (optional)
     bpy.ops.object.mode_set(mode="OBJECT")
-
-
-def duplicate_mesh(obj, new_name, location=(0, 0, 0)):
-    """Duplicate an object, its mesh data, and its materials."""
-    obj_copy = obj.copy()
-    obj_copy.data = obj.data.copy()  # separate mesh data
-    obj_copy.name = new_name
-    new_mats = []
-    for mat in obj.data.materials:
-        if mat:
-            new_mats.append(mat.copy())
-        else:
-            new_mats.append(None)
-
-    obj_copy.data.materials.clear()
-    for m in new_mats:
-        obj_copy.data.materials.append(m)
-
-    bpy.context.collection.objects.link(obj_copy)
-    obj_copy.location = location
-    return obj_copy
-
-
-def duplicate_image(orig_img, new_name):
-    """
-    Duplicate a Blender image with all pixels and assign a new name.
-
-    Args:
-        orig_img (bpy.types.Image): the original Blender image
-        new_name (str): new name for the duplicated image
-
-    Returns:
-        bpy.types.Image: the new duplicated image
-    """
-    # 1. Create new image with same size and alpha setting
-    new_img = bpy.data.images.new(
-        name=new_name,
-        width=orig_img.size[0],
-        height=orig_img.size[1],
-        alpha=orig_img.alpha_mode != "NONE",  # True if original has alpha
-        float_buffer=orig_img.is_float,  # True if original is float
-    )
-
-    # 2. Copy pixel data
-    buffer = np.array(orig_img.pixels[:], dtype=np.float32)
-    new_img.pixels.foreach_set(buffer)
-
-    # 3. Update to make Blender aware
-    new_img.update()
-
-    return new_img
 
 
 def strip_to_diffuse_normal(obj):
@@ -470,70 +418,6 @@ def clear_texture(obj):
     current_texture.pixels.foreach_set(buffer)
 
 
-def clear_faces_local(obj, face_indices):
-    """Zero the alpha of texels covered by ``face_indices`` in ``obj``'s paint
-    texture, leaving every other pixel — RGB and alpha — untouched.
-
-    The selected faces are rasterized in UV space via :func:`cv2.fillPoly`, so
-    the cleared region is exactly the texture footprint of the user's mesh
-    selection regardless of how the server might respond.
-    """
-    if not face_indices:
-        return False
-
-    texture = get_current_texture(obj)
-    if texture is None:
-        return False
-
-    w, h = texture.size[0], texture.size[1]
-    if w == 0 or h == 0:
-        return False
-
-    in_edit = obj.mode == "EDIT"
-    if in_edit:
-        bm = bmesh.from_edit_mesh(obj.data)
-        owns_bm = False
-    else:
-        bm = bmesh.new()
-        bm.from_mesh(obj.data)
-        owns_bm = True
-
-    try:
-        uv_layer = bm.loops.layers.uv.active
-        if uv_layer is None:
-            return False
-
-        bm.faces.ensure_lookup_table()
-        face_set = set(face_indices)
-        polygons = []
-        for face in bm.faces:
-            if face.index not in face_set:
-                continue
-            verts = [
-                [loop[uv_layer].uv.x * w, loop[uv_layer].uv.y * h]
-                for loop in face.loops
-            ]
-            polygons.append(np.array(verts, dtype=np.int32))
-    finally:
-        if owns_bm:
-            bm.free()
-
-    if not polygons:
-        return False
-
-    mask = np.zeros((h, w), dtype=np.uint8)
-    cv2.fillPoly(mask, polygons, 1)
-
-    buffer_size = w * h * 4
-    pixels = np.empty(buffer_size, dtype=np.float32)
-    texture.pixels.foreach_get(pixels)
-    arr = pixels.reshape(h, w, 4)
-    arr[..., 3] = arr[..., 3] * (1.0 - mask.astype(np.float32))
-    texture.pixels.foreach_set(arr.ravel())
-    texture.update()
-    return True
-
-
 def update_texture(obj, texture: torch.Tensor, soft_merge=True):
     """Merge a server-produced RGBA texture into the current paint texture.
 
@@ -760,66 +644,6 @@ def keep_latest_six_history(current_tex):
         bpy.data.images.remove(img)
 
 
-def find_principled_and_normal_node(mat):
-    """Return (principled_node, normal_node) or (None, None)."""
-    if not mat or not mat.use_nodes:
-        return None, None
-
-    nodes = mat.node_tree.nodes
-
-    principled = None
-    normal = None
-
-    for n in nodes:
-        if n.type == "BSDF_PRINCIPLED":
-            principled = n
-        elif n.type == "NORMAL_MAP":
-            normal = n
-
-    return principled, normal
-
-
-def is_normal_connected(mat):
-    """Return True if Normal Map node is connected to Principled Normal input."""
-    principled, normal = find_principled_and_normal_node(mat)
-    if not principled or not normal:
-        return False
-
-    for link in principled.inputs["Normal"].links:
-        if link.from_node == normal:
-            return True
-
-    return False
-
-
-def connect_normal(mat):
-    """Connect Normal Map → Principled Normal."""
-    principled, normal = find_principled_and_normal_node(mat)
-    if not principled or not normal:
-        return
-
-    nt = mat.node_tree
-
-    # Clear any existing links to Normal input
-    for link in list(principled.inputs["Normal"].links):
-        nt.links.remove(link)
-
-    # Create the connection
-    nt.links.new(normal.outputs["Normal"], principled.inputs["Normal"])
-
-
-def disconnect_normal(mat):
-    """Disconnect anything going to the Principled Normal input."""
-    principled, normal = find_principled_and_normal_node(mat)
-    if not principled:
-        return
-
-    nt = mat.node_tree
-
-    for link in list(principled.inputs["Normal"].links):
-        nt.links.remove(link)
-
-
 def expand_mask_soft(mask_arr, max_distance=20):
     """Expand a 2D binary mask outward with an exponential falloff.
 
@@ -845,40 +669,3 @@ def expand_mask_soft(mask_arr, max_distance=20):
     soft_mask = np.clip(soft_mask, 0.0, 1.0)
 
     return soft_mask
-
-
-def composite_inpaint(
-    texture_existing,
-    texture_inpaint,
-    mask_existing,
-    mask_inpaint,
-    mask_fill,
-    soft=True,
-    soft_margin=20,
-):
-    """Blend an inpainted texture into an existing texture using fill masks.
-
-    Args:
-        texture_existing: Existing RGBA texture array in ``[0, 1]``.
-        texture_inpaint: New RGBA texture array in ``[0, 1]``.
-        mask_existing: Alpha or occupancy mask for existing pixels.
-        mask_inpaint: Mask for valid inpainted pixels.
-        mask_fill: Binary mask describing the region to fill.
-        soft: When ``True``, expands ``mask_fill`` with a soft falloff before
-            blending.
-        soft_margin: Distance passed to :func:`expand_mask_soft`.
-
-    Returns:
-        Updated RGBA texture array with the alpha channel recomputed from the
-        existing and filled regions.
-    """
-
-    if soft:
-        mask_fill_soft = expand_mask_soft(mask_fill, max_distance=soft_margin)
-        w_inpaint = mask_fill_soft * mask_existing * mask_inpaint + mask_fill
-    else:
-        w_inpaint = mask_fill
-    composite = texture_inpaint * w_inpaint + texture_existing * (1.0 - w_inpaint)
-    alpha = mask_existing + mask_fill
-    composite[:, 3, ...] = alpha
-    return composite

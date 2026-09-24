@@ -1,6 +1,3 @@
-from bpy.props import StringProperty, IntProperty,PointerProperty
-from bpy.types import PropertyGroup, Panel, Operator
-import bpy.utils.previews
 import bpy
 
 class GlossConfig(bpy.types.PropertyGroup):
@@ -31,23 +28,6 @@ class GlossBrush(bpy.types.PropertyGroup):
             ('PreSampledReferenceBrush', "PreSampledReferenceBrush", "Pre-sampled reference brush")
         ],
         default='AutoSampledReferenceBrush'
-    )
-
-
-class FaceIndexItem(bpy.types.PropertyGroup):
-    """Container for a single mesh face index in Blender collections."""
-    index: bpy.props.IntProperty(name="Face Index")
-    
-
-class InferenceViewSettings(bpy.types.PropertyGroup):
-    """Controls for choosing faces or cameras during inference workflows."""
-    selection_mode: bpy.props.EnumProperty(
-        name="Mode",
-        items=[
-            ('FACE', "FACE", ""),
-            ('CAMERA', "CAMERA", "")
-        ],
-        default='FACE'
     )
 
 
