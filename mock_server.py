@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 """Minimum viable Gloss server, for testing the add-on without a GPU.
 
 Speaks the tagged protocol in ``protocol.py``: every reply carries a ``type``
