@@ -1,7 +1,10 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-# TODO: !!! Switch to using Kaolin version
+# Mirrors Kaolin's ``kaolin.visualize.web.io`` binary format, which the Gloss server
+# uses (via ``gloss_interactive/transport.py``). The add-on keeps its own copy because
+# Kaolin cannot be imported in Blender's Python (it needs a CUDA build, torch >= 2.5.1
+# and Python >= 3.10). Keep the encoding compatible with Kaolin's.
 
 import collections
 import json
@@ -26,6 +29,8 @@ class BinaryIoDataType(IntEnum):
     STRING = 9
     DICT = 10
     LIST = 11
+    PNG = 12  # PNG-compressed image; payload is the encoded byte stream
+    JPEG = 13  # JPEG-compressed image; payload is the encoded byte stream
     UNSUPPORTED = 100
 
 
@@ -219,7 +224,7 @@ def typed_value_from_binary(bytes_msg, offset, length, type_code):
         tuple[Any, int]: The decoded value and the number of bytes consumed from
         ``offset`` onward.
     """
-    # Length is byte length for strings, but num elements for other types
+    # Length is byte length for strings/PNG/JPEG, but num elements for other types
     if type_code == BinaryIoDataType.STRING:
         return string_from_binary(bytes_msg, offset, length), length
     elif type_code == BinaryIoDataType.DICT:
@@ -228,14 +233,42 @@ def typed_value_from_binary(bytes_msg, offset, length, type_code):
     elif type_code == BinaryIoDataType.LIST:
         value, read_bytes = _list_from_binary(bytes_msg, length=length, offset=offset)
         return value, read_bytes
+    elif type_code in (BinaryIoDataType.PNG, BinaryIoDataType.JPEG):
+        return _decode_image_bytes(bytes(bytes_msg[offset:offset + length])), length
     else:
         np_type, bytes_per_element = np_type_from_type_id(type_code)
         if np_type is None:
-            return None, 0
+            # Without a byte count the rest of the message cannot be located.
+            raise ValueError(f'Cannot decode unknown binary type code {int(type_code)}')
         read_bytes = gap_until_offset_n(offset, bytes_per_element)
         value = np.frombuffer(bytes_msg, dtype=np_type, count=length, offset=offset + read_bytes)
         read_bytes += length * bytes_per_element
         return value, read_bytes
+
+
+def _decode_image_bytes(payload):
+    """Decode a PNG/JPEG payload to an HWC uint8 ``torch.Tensor`` in RGB(A) order.
+
+    Matches Kaolin's decoder, which the server uses if it sends compressed images
+    (``image_format`` other than ``"raw"``). Uses ``torchvision.io`` like Kaolin and
+    falls back to OpenCV when torchvision's image codecs are unavailable.
+    """
+    try:
+        import torchvision.io as tvio
+        img_chw = tvio.decode_image(torch.frombuffer(bytearray(payload), dtype=torch.uint8))
+        return img_chw.permute(1, 2, 0).contiguous()
+    except (ImportError, RuntimeError):
+        import cv2
+        img = cv2.imdecode(np.frombuffer(payload, dtype=np.uint8), cv2.IMREAD_UNCHANGED)
+        if img is None:
+            raise ValueError('Failed to decode PNG/JPEG payload')
+        if img.ndim == 2:
+            img = img[..., None]
+        elif img.shape[2] == 3:
+            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        elif img.shape[2] == 4:
+            img = cv2.cvtColor(img, cv2.COLOR_BGRA2RGBA)
+        return torch.from_numpy(np.ascontiguousarray(img))
 
 
 def value_from_binary(bytes_msg, offset):

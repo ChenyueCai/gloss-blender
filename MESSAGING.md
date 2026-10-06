@@ -49,6 +49,10 @@ Type constants live in `protocol.py`, mirrored at
 
 The binary protocol (`utils/io.py:84`) supports str / dict / list / numeric
 ndarrays with 4-byte alignment and type-coded headers (`BinaryIoDataType`).
+It mirrors Kaolin's `kaolin.visualize.web.io`, which the server uses through
+`gloss_interactive/transport.py`. The server pins `image_format="raw"`, so images
+travel as plain uint8 arrays; the add-on can also decode Kaolin's PNG (type 12)
+and JPEG (type 13) payloads, and raises on any unknown type code.
 
 ### Pixel payloads
 
@@ -59,7 +63,8 @@ the quantization happens on-device, so the GPU→host copy shrinks by the same 4
 
 `send_large_image(...)` splits a payload into chunks of at most
 `DEFAULT_CHUNK_BYTES` (10 MB), defined identically in `protocol.py`,
-`utils/io.py` and the server's `kaolin_tmp_io.py`.
+`utils/io.py` and the server's `gloss_interactive/transport.py` (which imports it
+from the server's `protocol.py`).
 
 For one 4096×4096 RGBA texture:
 
